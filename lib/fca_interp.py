@@ -3,7 +3,8 @@ import pandas as pd
 import scipy as sp
 from tqdm import tqdm
 import concepts as concepts_mit
-
+import networkx as nx
+import plotly.graph_objects as go
 
 class Concept:
 	def __init__(self, extent, intent, idx=None, title=None):
@@ -13,6 +14,7 @@ class Concept:
 		self._up_neighbs = None
 		self._idx = idx
 		self._title = title
+		self._level = None
 		#self._extent_bit = (2**self._extent).sum() if len(self._extent)>0 else 0
 		#self._intent_bit = (2**self._intent).sum() if len(self._intent)>0 else 0
 
@@ -37,6 +39,8 @@ class Concept:
 		if self._up_neighbs is not None:
 			s += f"upper neighbours (len: {len(self._up_neighbs)}): " + \
 				 f"{','.join([f'{c}' for c in self._up_neighbs]) if len(self._up_neighbs)>0 else 'emptyset'}\n"
+		if self._level is not None:
+			s += f"level: {self._level}\n"
 		return s
 
 	def __str__(self):
@@ -239,16 +243,20 @@ class FormalManager:
 				for idx, c in enumerate(sorted(concepts, key=lambda x: len(x.get_intent())))])
 		self._concepts = concepts
 
-		self._top_concept = [c for c in concepts if len(c.get_extent()) == len(self._context.get_objs())][0]
-		self._bottom_concept = [c for c in concepts if len(c.get_intent()) == len(self._context.get_attrs())][0]
+		self._top_concept = [c for c in concepts if len(c.get_extent()) == len(self._context.get_objs())]
+		self._top_concept = self._top_concept[0] if len(self._top_concept) > 0 else None
+
+		self._bottom_concept = [c for c in concepts if len(c.get_intent()) == len(self._context.get_attrs())]
+		self._bottom_concept = self._bottom_concept[0] if len(self._bottom_concept)>0 else None
 
 	def _concepts_by_mit(self):
-		cntx_mit = concepts_mit.Context([f"g{x}" for x in range(len(self._context.get_objs()))],
-										[f"m{x}" for x in range(len(self._context.get_attrs()))],
+		cntx_mit = concepts_mit.Context(self._context.get_objs(),#f"g{x}" for x in range(len(self._context.get_objs()))],
+										self._context.get_attrs(),#[f"m{x}" for x in range(len(self._context.get_attrs()))],
 										self._context.get_data()
 										)
 
-		concepts = {Concept(ext_, int_) for ext_, int_ in cntx_mit.lattice}
+		self._lattice_mit = cntx_mit.lattice
+		concepts = {Concept(ext_, int_) for ext_, int_ in self._lattice_mit}
 		return concepts
 
 	def _close_by_one(self, max_iters_num, max_num_attrs, min_num_objs, use_tqdm):
@@ -306,7 +314,7 @@ class FormalManager:
 
 		return concepts
 
-	def construct_lattice_connections(self, use_tqdm=True):
+	def _construct_lattice_connections(self, use_tqdm=True):
 		n_concepts = len(self._concepts)
 		cncpts_map = {c._idx:c for c in self._concepts}
 		all_low_neighbs = {c._idx:set() for c in self._concepts}
@@ -328,3 +336,102 @@ class FormalManager:
 			concept._up_neighbs = set()
 			for ln_idx in concept._low_neighbs:
 				cncpts_map[ln_idx]._up_neighbs.add(concept._idx)
+
+	def _calc_concept_levels(self):
+		concepts = sorted(self._concepts, key=lambda c: c._idx)
+		if self._top_concept is None:
+			return
+		#concepts_to_check = [self._top_concept]
+		concepts[0]._level = 0
+		for c in concepts[1:]:
+			c._level = max([concepts[un]._level for un in c._up_neighbs]) + 1
+
+	def construct_lattice(self, use_tqdm=False):
+		self._construct_lattice_connections(use_tqdm)
+		self._calc_concept_levels()
+
+	def get_plotly_fig(self):
+		connections_dict = {}
+		for c in self.get_concepts():
+			connections_dict[c._idx] = [ln_idx for ln_idx in c._low_neighbs]
+		level_widths = {}
+		concepts = sorted(self._concepts, key=lambda c: c._idx)
+		for c in concepts:
+			level_widths[c._level] = level_widths.get(c._level, 0) + 1
+		max_width = max(level_widths.values())
+		n_levels = len(level_widths)
+		pos = {}
+
+		last_level = None
+		cur_level_idx = None
+		for c in sorted(concepts, key=lambda c: c._level):
+			cl = c._level
+			cur_level_idx = cur_level_idx + 1 if cl == last_level else 1
+			last_level = cl
+			pos[c._idx] = (cur_level_idx - level_widths[cl] / 2 - 0.5, n_levels - cl)
+
+		G = nx.from_dict_of_lists(connections_dict)
+		for c in concepts:
+			G.node[c._idx]['pos'] = pos[c._idx]
+
+		edge_x = [y for edge in G.edges for y in [G.nodes[edge[0]]['pos'][0], G.nodes[edge[1]]['pos'][0], None]]
+		edge_y = [y for edge in G.edges for y in [G.nodes[edge[0]]['pos'][1], G.nodes[edge[1]]['pos'][1], None]]
+
+		node_x = [G.nodes[node]['pos'][0] for node in G.nodes]
+		node_y = [G.nodes[node]['pos'][1] for node in G.nodes]
+
+		edge_trace = go.Scatter(
+			x=edge_x, y=edge_y,
+			line=dict(width=0.5, color='#888'),
+			hoverinfo='none',
+			mode='lines')
+
+		node_trace = go.Scatter(
+			x=node_x, y=node_y,
+			mode='markers',
+			hoverinfo='text',
+			marker=dict(
+				showscale=True,
+				# colorscale options
+				# 'Greys' | 'YlGnBu' | 'Greens' | 'YlOrRd' | 'Bluered' | 'RdBu' |
+				# 'Reds' | 'Blues' | 'Picnic' | 'Rainbow' | 'Portland' | 'Jet' |
+				# 'Hot' | 'Blackbody' | 'Earth' | 'Electric' | 'Viridis' |
+				colorscale='YlGnBu',
+				reversescale=True,
+				color=[],
+				size=10,
+				colorbar=dict(
+					thickness=15,
+					title='Node Connections',
+					xanchor='left',
+					titleside='right'
+				),
+				line_width=2))
+		node_adjacencies = []
+		node_text = []
+		# for node, adjacencies in enumerate(G.adjacency()):
+		for node, adjacencies in G.adjacency():
+			node_adjacencies.append(len(adjacencies))
+			# node_text.append('a\nbc')
+			node_text.append(concepts[node].__repr__().replace('\n', '<br>'))
+		# node_text.append('# of connections: '+str(len(adjacencies[1])))
+
+		node_trace.marker.color = node_adjacencies
+		node_trace.text = node_text
+
+		fig = go.Figure(data=[edge_trace, node_trace],
+						layout=go.Layout(
+							title='Concept Lattice',
+							titlefont_size=16,
+							showlegend=False,
+							hovermode='closest',
+							margin=dict(b=20, l=5, r=5, t=40),
+							# annotations=[ dict(
+							#    text="Python code: <a href='https://plot.ly/ipython-notebooks/network-graphs/'> https://plot.ly/ipython-notebooks/network-graphs/</a>",
+							#    showarrow=False,
+							#    xref="paper", yref="paper",
+							#    x=0.005, y=-0.002 ) ],
+							xaxis=dict(showgrid=False, zeroline=False, showticklabels=False),
+							yaxis=dict(showgrid=False, zeroline=False, showticklabels=False))
+						)
+		return fig
