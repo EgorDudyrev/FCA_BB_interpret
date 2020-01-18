@@ -15,6 +15,7 @@ class Concept:
 		self._idx = idx
 		self._title = title
 		self._level = None
+		self._mean_y = None
 		#self._extent_bit = (2**self._extent).sum() if len(self._extent)>0 else 0
 		#self._intent_bit = (2**self._intent).sum() if len(self._intent)>0 else 0
 
@@ -39,8 +40,36 @@ class Concept:
 		if self._up_neighbs is not None:
 			s += f"upper neighbours (len: {len(self._up_neighbs)}): " + \
 				 f"{','.join([f'{c}' for c in self._up_neighbs]) if len(self._up_neighbs)>0 else 'emptyset'}\n"
-		if self._level is not None:
-			s += f"level: {self._level}\n"
+		s += f"level: {self._level}\n" if self._level is not None else ''
+		s += f"mean_y: {self._mean_y}\n" if self._mean_y is not None else ''
+		return s
+    
+	def pretty_repr(self, print_low_neighbs=False, print_up_neighbs=False, print_level=False, print_mean_y=False,y_precision=None):
+		s = "Concept"
+		if self._idx is not None:
+			s += f" {self._idx}"
+		if self._title is not None:
+			s += f" '{self._title}'"
+		s += f"\n"
+		def pretty_str(lst, lim=10):
+			if len(lst)==0:
+				return 'emptyset'
+			else:
+				return ','.join([f'{g}' for g in lst[:lim]])+(',...' if len(lst)>lim else '')
+
+		s += f"extent (len: {len(self._extent)}): {pretty_str(self._extent)}\n"
+		s += f"intent (len: {len(self._intent)}): {pretty_str(self._intent)}\n"
+
+		if print_low_neighbs and self._low_neighbs is not None:
+			s += f"lower neighbours (len: {len(self._low_neighbs)}): {pretty_str(self._low_neighbs)}\n"
+		if print_up_neighbs and self._up_neighbs is not None:
+			s += f"upper neighbours (len: {len(self._up_neighbs)}): {pretty_str(self._up_neighbs)}\n"
+		s += f"level: {self._level}\n" if print_level and self._level is not None else ''
+		if print_mean_y:
+			if y_precision is None:
+				s += f"mean_y: {self._mean_y}\n"
+			else:
+				s += f"mean_y: {np.round(self._mean_y,y_precision)}\n"
 		return s
 
 	def __str__(self):
@@ -63,7 +92,7 @@ class Concept:
 
 
 class Context:
-	def __init__(self, data, objs=None, attrs=None):
+	def __init__(self, data, objs=None, attrs=None, y_vals=None):
 		if type(data) == list:
 			data = np.array(data)
 		
@@ -76,9 +105,19 @@ class Context:
 			attrs = list(range(len(objs[0]))) if attrs is None else attrs
 		else:
 			raise TypeError(f"DataType {type(data)} is not understood. np.ndarray or pandas.DataFrame is required")
-
+		
 		assert data.dtype == bool, 'Only Boolean contexts are supported for now'
 
+		if y_vals is not None:
+			if type(y_vals)==pd.Series:
+				self._y_vals = y_vals.values
+			elif type(y_vals)==np.ndarray:
+				self._y_vals = y_vals
+			else:
+				raise TypeError(f"DataType {type(y_vals)} is not understood. np.ndarray or pandas.Series is required")
+			assert len(y_vals)==len(data), f'Data and Y_vals have different num of objects ( Data: {len(data)}, y_vals: {len(y_vals)})'
+
+        
 		self._data = data
 		self._objs = np.array(objs)
 		self._attrs = np.array(attrs)
@@ -241,6 +280,11 @@ class FormalManager:
 
 		concepts = set([Concept(c.get_extent(), c.get_intent(), idx)
 				for idx, c in enumerate(sorted(concepts, key=lambda x: len(x.get_intent())))])
+        
+		if self._context._y_vals is not None:
+			for c in concepts:
+				c._mean_y = self._context._y_vals[np.isin(self._context.get_objs(), c.get_extent())].mean()
+        
 		self._concepts = concepts
 
 		self._top_concept = [c for c in concepts if len(c.get_extent()) == len(self._context.get_objs())]
@@ -350,7 +394,7 @@ class FormalManager:
 		self._construct_lattice_connections(use_tqdm)
 		self._calc_concept_levels()
 
-	def get_plotly_fig(self):
+	def get_plotly_fig(self, level_sort=None, y_precision=None):
 		connections_dict = {}
 		for c in self.get_concepts():
 			connections_dict[c._idx] = [ln_idx for ln_idx in c._low_neighbs]
@@ -369,6 +413,11 @@ class FormalManager:
 			cur_level_idx = cur_level_idx + 1 if cl == last_level else 1
 			last_level = cl
 			pos[c._idx] = (cur_level_idx - level_widths[cl] / 2 - 0.5, n_levels - cl)
+            
+		if level_sort is not None and self._context._y_vals is not None:
+			clust_by_levels = {}
+			for c in concepts:
+				clust_by_levels[c._level] = clust_by_levels.get(c._level,[])+[c]
 
 		G = nx.from_dict_of_lists(connections_dict)
 		for c in concepts:
@@ -396,27 +445,30 @@ class FormalManager:
 				# 'Greys' | 'YlGnBu' | 'Greens' | 'YlOrRd' | 'Bluered' | 'RdBu' |
 				# 'Reds' | 'Blues' | 'Picnic' | 'Rainbow' | 'Portland' | 'Jet' |
 				# 'Hot' | 'Blackbody' | 'Earth' | 'Electric' | 'Viridis' |
-				colorscale='YlGnBu',
+				colorscale='RdBu',
 				reversescale=True,
 				color=[],
 				size=10,
 				colorbar=dict(
 					thickness=15,
-					title='Node Connections',
+					title='Mean Prediction',
 					xanchor='left',
 					titleside='right'
 				),
 				line_width=2))
 		node_adjacencies = []
 		node_text = []
+		node_color = []
 		# for node, adjacencies in enumerate(G.adjacency()):
 		for node, adjacencies in G.adjacency():
+			c = concepts[node]            
+			node_color.append(c._mean_y if c._mean_y is not None else 'grey')
 			node_adjacencies.append(len(adjacencies))
 			# node_text.append('a\nbc')
-			node_text.append(concepts[node].__repr__().replace('\n', '<br>'))
+			node_text.append(c.pretty_repr(print_mean_y=True, y_precision=y_precision).replace('\n', '<br>'))
 		# node_text.append('# of connections: '+str(len(adjacencies[1])))
 
-		node_trace.marker.color = node_adjacencies
+		node_trace.marker.color = node_color#node_adjacencies
 		node_trace.text = node_text
 
 		fig = go.Figure(data=[edge_trace, node_trace],
