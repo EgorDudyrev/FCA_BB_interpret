@@ -16,6 +16,8 @@ class Concept:
 		self._title = title
 		self._level = None
 		self._mean_y = None
+		self._new_objs = None
+		self._new_attrs = None
 		#self._extent_bit = (2**self._extent).sum() if len(self._extent)>0 else 0
 		#self._intent_bit = (2**self._intent).sum() if len(self._intent)>0 else 0
 
@@ -34,6 +36,10 @@ class Concept:
 		s += f"\n"
 		s += f"extent (len: {len(self._extent)}): {','.join([f'{g}' for g in self._extent]) if len(self._extent)>0 else 'emptyset'}\n"
 		s += f"intent (len: {len(self._intent)}): {','.join([f'{m}' for m in self._intent]) if len(self._intent)>0 else 'emptyset'}\n"
+		if self._new_objs:
+			s += f"new extent (len: {len(self._new_obj)}): {','.join([f'{g}' for g in self._new_obj]) if len(self._new_obj) > 0 else 'emptyset'}\n"
+		if self._new_attrs:
+			s += f"new intent (len: {len(self._new_attr)}): {','.join([f'{m}' for m in self._new_attr]) if len(self._new_attr) > 0 else 'emptyset'}\n"
 		if self._low_neighbs is not None:
 			s += f"lower neighbours (len: {len(self._low_neighbs)}): " + \
 				 f"{','.join([f'{c}' for c in self._low_neighbs]) if len(self._low_neighbs)>0 else 'emptyset'}\n"
@@ -59,6 +65,11 @@ class Concept:
 
 		s += f"extent (len: {len(self._extent)}): {pretty_str(self._extent)}\n"
 		s += f"intent (len: {len(self._intent)}): {pretty_str(self._intent)}\n"
+		if self._new_objs is not None:
+			s += f"new extent (len: {len(self._new_objs)}): {pretty_str(self._new_objs)}\n"
+
+		if self._new_attrs is not None:
+			s += f"new intent (len: {len(self._new_attrs)}): {pretty_str(self._new_attrs)}\n"
 
 		if print_low_neighbs and self._low_neighbs is not None:
 			s += f"lower neighbours (len: {len(self._low_neighbs)}): {pretty_str(self._low_neighbs)}\n"
@@ -381,6 +392,12 @@ class FormalManager:
 			for ln_idx in concept._low_neighbs:
 				cncpts_map[ln_idx]._up_neighbs.add(concept._idx)
 
+	def _find_new_concept_objatr(self):
+		cncpt_dict = {c._idx:c for c in self._concepts}
+		for c in self._concepts:
+			c._new_attrs = tuple(set(c.get_intent())-{m for un_idx in c._up_neighbs for m in cncpt_dict[un_idx].get_intent()})
+			c._new_objs = tuple(set(c.get_extent()) - {m for ln_idx in c._low_neighbs for m in cncpt_dict[ln_idx].get_extent()})
+
 	def _calc_concept_levels(self):
 		concepts = sorted(self._concepts, key=lambda c: c._idx)
 		if self._top_concept is None:
@@ -393,8 +410,10 @@ class FormalManager:
 	def construct_lattice(self, use_tqdm=False):
 		self._construct_lattice_connections(use_tqdm)
 		self._calc_concept_levels()
+		self._find_new_concept_objatr()
 
-	def get_plotly_fig(self, level_sort=None, y_precision=None):
+	def get_plotly_fig(self, level_sort=None, y_precision=None, color_by=None, title=None,
+					   cbar_title=None, cmin=None, cmid=None, cmax=None, cmap='RdBu'):
 		connections_dict = {}
 		for c in self.get_concepts():
 			connections_dict[c._idx] = [ln_idx for ln_idx in c._low_neighbs]
@@ -415,9 +434,39 @@ class FormalManager:
 			pos[c._idx] = (cur_level_idx - level_widths[cl] / 2 - 0.5, n_levels - cl)
             
 		if level_sort is not None and self._context._y_vals is not None:
-			clust_by_levels = {}
+			level_sort = n_levels//2 if level_sort == 'mean' else level_sort
+
+			cncpt_by_levels = {}
 			for c in concepts:
-				clust_by_levels[c._level] = clust_by_levels.get(c._level,[])+[c]
+				cncpt_by_levels[c._level] = cncpt_by_levels.get(c._level,[])+[c]
+			#print(cncpt_by_levels)
+			pos = {}
+
+			cl = level_sort
+			for c_l_idx, c in enumerate(sorted(cncpt_by_levels[level_sort],
+											   key=lambda c: c._mean_y if color_by=='mean_y'
+											   		else c._metric if color_by=='metric'
+											   		else None)):
+				pos[c._idx] = (c_l_idx - level_widths[cl]/2 + 0.5, n_levels - cl)
+
+			for cl in range(level_sort-1,-1,-1):
+				for c_l_idx,c in enumerate(cncpt_by_levels[cl]):
+					pos[c._idx] = (np.mean([pos[ln][0] for ln in c._low_neighbs if ln in pos]), n_levels-cl)
+					#print(cl, c._idx, pos[c._idx])
+
+			for cl in range(level_sort+1,n_levels):
+				for c_l_idx,c in enumerate(cncpt_by_levels[cl]):
+					pos[c._idx] = (np.mean([pos[un][0] for un in c._up_neighbs if un in pos]), n_levels-cl)
+					#print(cl, c._idx, pos[c._idx])
+
+			for cl in range(n_levels):
+				m = np.mean([pos[c._idx][0] for c in cncpt_by_levels[cl]])
+				for c in cncpt_by_levels[cl]:
+					pos[c._idx] = (pos[c._idx][0]-m,pos[c._idx][1])
+
+			for cl in range(n_levels):
+				for c_l_idx,c in enumerate(sorted(cncpt_by_levels[cl], key=lambda c: pos[c._idx][0])):
+					pos[c._idx] = (c_l_idx - level_widths[cl] / 2 + 0.5, n_levels - cl)
 
 		G = nx.from_dict_of_lists(connections_dict)
 		for c in concepts:
@@ -437,43 +486,55 @@ class FormalManager:
 
 		node_trace = go.Scatter(
 			x=node_x, y=node_y,
-			mode='markers',
+			mode='markers+text',
 			hoverinfo='text',
+			textposition='middle right',
 			marker=dict(
 				showscale=True,
 				# colorscale options
 				# 'Greys' | 'YlGnBu' | 'Greens' | 'YlOrRd' | 'Bluered' | 'RdBu' |
 				# 'Reds' | 'Blues' | 'Picnic' | 'Rainbow' | 'Portland' | 'Jet' |
 				# 'Hot' | 'Blackbody' | 'Earth' | 'Electric' | 'Viridis' |
-				colorscale='RdBu',
+				colorscale=cmap,
 				reversescale=True,
 				color=[],
 				size=10,
 				colorbar=dict(
 					thickness=15,
-					title='Mean Prediction',
+					title=cbar_title if cbar_title else 'y_mean',
 					xanchor='left',
-					titleside='right'
+					titleside='right',
 				),
 				line_width=2))
 		node_adjacencies = []
 		node_text = []
 		node_color = []
+		node_title = []
 		# for node, adjacencies in enumerate(G.adjacency()):
 		for node, adjacencies in G.adjacency():
 			c = concepts[node]            
 			node_color.append(c._mean_y if c._mean_y is not None else 'grey')
 			node_adjacencies.append(len(adjacencies))
 			# node_text.append('a\nbc')
-			node_text.append(c.pretty_repr(print_mean_y=True, y_precision=y_precision).replace('\n', '<br>'))
+			node_text.append(c.pretty_repr(print_mean_y=True, y_precision=y_precision).replace('\n', '<br>')+\
+							 '')#f'\npos({pos[c._idx]})')
+			node_title.append(f"{','.join(c._new_attrs) if c._new_attrs else ''}<br>{','.join(c._new_objs) if c._new_objs else ''}")
 		# node_text.append('# of connections: '+str(len(adjacencies[1])))
 
-		node_trace.marker.color = node_color#node_adjacencies
-		node_trace.text = node_text
+		node_trace.marker.color = node_color #node_adjacencies
+		node_trace.hovertext = node_text
+		node_trace.text = node_title
+
+		if cmin is not None:
+			node_trace.marker.cmin = cmin
+		if cmax is not None:
+			node_trace.marker.cmax = cmax
+		if cmid is not None:
+			node_trace.marker.cmid = cmid
 
 		fig = go.Figure(data=[edge_trace, node_trace],
 						layout=go.Layout(
-							title='Concept Lattice',
+							title=title if title else 'Concept Lattice',
 							titlefont_size=16,
 							showlegend=False,
 							hovermode='closest',
