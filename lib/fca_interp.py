@@ -7,7 +7,7 @@ import networkx as nx
 import plotly.graph_objects as go
 
 class Concept:
-	def __init__(self, extent, intent, idx=None, title=None):
+	def __init__(self, extent, intent, idx=None, title=None, ):
 		self._extent = np.array(extent)
 		self._intent = np.array(intent)
 		self._low_neighbs = None
@@ -37,9 +37,9 @@ class Concept:
 		s += f"extent (len: {len(self._extent)}): {','.join([f'{g}' for g in self._extent]) if len(self._extent)>0 else 'emptyset'}\n"
 		s += f"intent (len: {len(self._intent)}): {','.join([f'{m}' for m in self._intent]) if len(self._intent)>0 else 'emptyset'}\n"
 		if self._new_objs:
-			s += f"new extent (len: {len(self._new_obj)}): {','.join([f'{g}' for g in self._new_obj]) if len(self._new_obj) > 0 else 'emptyset'}\n"
+			s += f"new extent (len: {len(self._new_objs)}): {','.join([f'{g}' for g in self._new_objs]) if len(self._new_objs) > 0 else 'emptyset'}\n"
 		if self._new_attrs:
-			s += f"new intent (len: {len(self._new_attr)}): {','.join([f'{m}' for m in self._new_attr]) if len(self._new_attr) > 0 else 'emptyset'}\n"
+			s += f"new intent (len: {len(self._new_attrs)}): {','.join([f'{m}' for m in self._new_attrs]) if len(self._new_attrs) > 0 else 'emptyset'}\n"
 		if self._low_neighbs is not None:
 			s += f"lower neighbours (len: {len(self._low_neighbs)}): " + \
 				 f"{','.join([f'{c}' for c in self._low_neighbs]) if len(self._low_neighbs)>0 else 'emptyset'}\n"
@@ -103,7 +103,7 @@ class Concept:
 
 
 class Context:
-	def __init__(self, data, objs=None, attrs=None, y_vals=None):
+	def __init__(self, data, objs=None, attrs=None, y_vals=None, cat_attrs=None):
 		if type(data) == list:
 			data = np.array(data)
 		
@@ -116,35 +116,74 @@ class Context:
 			attrs = list(range(len(objs[0]))) if attrs is None else attrs
 		else:
 			raise TypeError(f"DataType {type(data)} is not understood. np.ndarray or pandas.DataFrame is required")
-		
+
+		objs = np.array([str(g) for g in objs])
+		attrs = np.array([str(m) for m in attrs])
+
 		assert data.dtype == bool, 'Only Boolean contexts are supported for now'
 
 		if y_vals is not None:
-			if type(y_vals)==pd.Series:
+			if type(y_vals) == pd.Series:
 				self._y_vals = y_vals.values
-			elif type(y_vals)==np.ndarray:
+			elif type(y_vals) == np.ndarray:
 				self._y_vals = y_vals
 			else:
 				raise TypeError(f"DataType {type(y_vals)} is not understood. np.ndarray or pandas.Series is required")
-			assert len(y_vals)==len(data), f'Data and Y_vals have different num of objects ( Data: {len(data)}, y_vals: {len(y_vals)})'
+			assert len(y_vals) == len(data), f'Data and Y_vals have different num of objects ( Data: {len(data)}, y_vals: {len(y_vals)})'
 
-        
-		self._data = data
-		self._objs = np.array(objs)
-		self._attrs = np.array(attrs)
+		self._data_full = data
+		self._objs_full = objs
+		self._attrs_full = attrs
+		same_objs, same_attrs = self._reduce_context(data, objs, attrs)
+
+		self._same_objs = same_objs
+		self._same_attrs = same_attrs
+		self._data = data[[idx for idx,g in enumerate(objs) if g in same_objs.keys()]][:,
+						[idx for idx,m in enumerate(attrs) if m in same_attrs.keys()]]
+		self._objs = np.array([g for idx, g in enumerate(objs) if g in same_objs.keys()])
+		self._attrs = np.array([m for idx,m in enumerate(attrs) if m in same_attrs.keys()])
+		self._cat_attrs = np.array([m for idx,m in enumerate(cat_attrs) if m in same_attrs.keys()]) if cat_attrs else None
 
 		#ar = np.array([2 ** i for i in range(len(self._attrs))])
 		#self._objs_bit = [(g*ar).sum() for g in self._data]
 		#del ar
 
+	def _reduce_context(self, data, objs, attrs):
+		same_attrs = {}
+		saw_attrs = set()
+		for i in range(data.shape[1]):
+			if i in saw_attrs:
+				continue
+			idxs = np.arange(i + 1, data.shape[1])[(data.T[i] == data.T[i + 1:]).mean(1) == 1]
+			idxs = [idx for idx in idxs if idx not in saw_attr]
+			same_attrs[i] = idxs
+			for idx in idxs:
+				saw_attrs.add(idx)
+
+		same_objs = {}
+		saw_objs = set()
+		for i in range(data.shape[0]):
+			if i in saw_objs:
+				continue
+			idxs = np.arange(i + 1, data.shape[0])[(data[i] == data[i + 1:]).mean(1) == 1]
+			idxs = [idx for idx in idxs if idx not in saw_objs]
+			same_objs[i] = idxs
+			for idx in idxs:
+				saw_objs.add(idx)
+
+		same_attrs = {attrs[k]: np.array(attrs)[v] if len(v)>0 else v for k, v in same_attrs.items()}
+		same_objs = {objs[k]: np.array(objs)[v] if len(v)>0 else v for k,v in same_objs.items()}
+
+		return same_objs, same_attrs
+
 	def get_attrs(self):
-		return self._attrs
+		return self._attrs_full
 
 	def get_objs(self):
-		return self._objs
+		return self._objs_full
 
 	def get_data(self):
-		return self._data
+		return self._data_full
 
 	def get_attr_values(self, m):
 		if type(m) == int:
@@ -256,6 +295,9 @@ class Context:
 		int_ = [idx for idx, c in enumerate(bin(int_)[2:][::-1]) if c == '1']
 		return int_
 
+	def _get_pattern_intersect(self, ms):
+		pass
+
 	def get_table(self):
 		return pd.DataFrame(self._data, index=self._objs, columns=self._attrs)
 
@@ -268,8 +310,9 @@ class Context:
 
 
 class FormalManager:
-	def __init__(self, context, target_attr=None):
+	def __init__(self, context, ds_obj=None, target_attr=None):
 		self._context = context
+		self._ds_obj = ds_obj
 		self._concepts = None
 		self._target_attr = target_attr
 		self._top_concept = None
@@ -289,9 +332,13 @@ class FormalManager:
 		else:
 			raise ValueError('The only supported algorithm is CBO (CloseByOne')
 
-		concepts = set([Concept(c.get_extent(), c.get_intent(), idx)
-				for idx, c in enumerate(sorted(concepts, key=lambda x: len(x.get_intent())))])
-        
+
+		concepts = set([Concept(
+			[g_ for g in c.get_extent() for g_ in [g]+list(self._context._same_objs[g])],
+			[m_ for m in c.get_intent() for m_ in [m]+list(self._context._same_attrs[m])],
+			idx
+		) for idx, c in enumerate(sorted(concepts, key=lambda x: len(x.get_intent())))])
+
 		if self._context._y_vals is not None:
 			for c in concepts:
 				c._mean_y = self._context._y_vals[np.isin(self._context.get_objs(), c.get_extent())].mean()
@@ -305,9 +352,9 @@ class FormalManager:
 		self._bottom_concept = self._bottom_concept[0] if len(self._bottom_concept)>0 else None
 
 	def _concepts_by_mit(self):
-		cntx_mit = concepts_mit.Context(self._context.get_objs(),#f"g{x}" for x in range(len(self._context.get_objs()))],
-										self._context.get_attrs(),#[f"m{x}" for x in range(len(self._context.get_attrs()))],
-										self._context.get_data()
+		cntx_mit = concepts_mit.Context(self._context._objs,#f"g{x}" for x in range(len(self._context.get_objs()))],
+										self._context._attrs,#[f"m{x}" for x in range(len(self._context.get_attrs()))],
+										self._context._data
 										)
 
 		self._lattice_mit = cntx_mit.lattice
@@ -413,7 +460,8 @@ class FormalManager:
 		self._find_new_concept_objatr()
 
 	def get_plotly_fig(self, level_sort=None, y_precision=None, color_by=None, title=None,
-					   cbar_title=None, cmin=None, cmid=None, cmax=None, cmap='RdBu'):
+					   cbar_title=None, cmin=None, cmid=None, cmax=None, cmap='RdBu',
+					   new_attrs_lim=5, new_objs_lim=5):
 		connections_dict = {}
 		for c in self.get_concepts():
 			connections_dict[c._idx] = [ln_idx for ln_idx in c._low_neighbs]
@@ -439,7 +487,6 @@ class FormalManager:
 			cncpt_by_levels = {}
 			for c in concepts:
 				cncpt_by_levels[c._level] = cncpt_by_levels.get(c._level,[])+[c]
-			#print(cncpt_by_levels)
 			pos = {}
 
 			cl = level_sort
@@ -452,12 +499,10 @@ class FormalManager:
 			for cl in range(level_sort-1,-1,-1):
 				for c_l_idx,c in enumerate(cncpt_by_levels[cl]):
 					pos[c._idx] = (np.mean([pos[ln][0] for ln in c._low_neighbs if ln in pos]), n_levels-cl)
-					#print(cl, c._idx, pos[c._idx])
 
 			for cl in range(level_sort+1,n_levels):
 				for c_l_idx,c in enumerate(cncpt_by_levels[cl]):
 					pos[c._idx] = (np.mean([pos[un][0] for un in c._up_neighbs if un in pos]), n_levels-cl)
-					#print(cl, c._idx, pos[c._idx])
 
 			for cl in range(n_levels):
 				m = np.mean([pos[c._idx][0] for c in cncpt_by_levels[cl]])
@@ -518,10 +563,16 @@ class FormalManager:
 			# node_text.append('a\nbc')
 			node_text.append(c.pretty_repr(print_mean_y=True, y_precision=y_precision).replace('\n', '<br>')+\
 							 '')#f'\npos({pos[c._idx]})')
-			node_title.append(f"{','.join(c._new_attrs) if c._new_attrs else ''}<br>{','.join(c._new_objs) if c._new_objs else ''}")
+			new_attrs_str = '' if len(c._new_attrs) == 0 else\
+				f"{','.join(c._new_attrs) if c._new_attrs else ''}" if len(c._new_attrs)<new_attrs_lim \
+					else f"n: {len(c._new_attrs)}"
+			new_objs_str = '' if len(c._new_objs) == 0 else \
+				f"{','.join(c._new_objs) if c._new_objs else ''}" if len(c._new_objs)<new_objs_lim \
+					else f"n: {len(c._new_objs)}"
+			node_title.append(new_attrs_str+'<br>'+new_objs_str)
 		# node_text.append('# of connections: '+str(len(adjacencies[1])))
 
-		node_trace.marker.color = node_color #node_adjacencies
+		node_trace.marker.color = node_color
 		node_trace.hovertext = node_text
 		node_trace.text = node_title
 
