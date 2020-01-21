@@ -7,7 +7,8 @@ import networkx as nx
 import plotly.graph_objects as go
 
 class Concept:
-	def __init__(self, extent, intent, idx=None, title=None, ):
+	def __init__(self, extent, intent, idx=None, pattern=None, title=None,
+				 y_true_mean=None, y_pred_mean=None, metrics=None):
 		self._extent = np.array(extent)
 		self._intent = np.array(intent)
 		self._low_neighbs = None
@@ -15,9 +16,12 @@ class Concept:
 		self._idx = idx
 		self._title = title
 		self._level = None
-		self._mean_y = None
 		self._new_objs = None
 		self._new_attrs = None
+		self._pattern = pattern
+		self._y_true_mean=y_true_mean
+		self._y_pred_mean=y_pred_mean
+		self._metrics = metrics
 		#self._extent_bit = (2**self._extent).sum() if len(self._extent)>0 else 0
 		#self._intent_bit = (2**self._intent).sum() if len(self._intent)>0 else 0
 
@@ -46,11 +50,16 @@ class Concept:
 		if self._up_neighbs is not None:
 			s += f"upper neighbours (len: {len(self._up_neighbs)}): " + \
 				 f"{','.join([f'{c}' for c in self._up_neighbs]) if len(self._up_neighbs)>0 else 'emptyset'}\n"
+		s += f"pattern: {self._pattern}\n" if self._pattern is not None else ''
 		s += f"level: {self._level}\n" if self._level is not None else ''
-		s += f"mean_y: {self._mean_y}\n" if self._mean_y is not None else ''
+
+		s += f"mean y_true: {self._y_true_mean}\n" if self._y_true_mean is not None else ''
+		s += f"mean y_pred: {self._y_pred_mean}\n" if self._y_pred_mean is not None else ''
+		s += f"metrics: {self._metrics}\n" if self._metrics is not None else ''
 		return s
     
-	def pretty_repr(self, print_low_neighbs=False, print_up_neighbs=False, print_level=False, print_mean_y=False,y_precision=None):
+	def pretty_repr(self, print_low_neighbs=False, print_up_neighbs=False, print_level=False, y_precision=None,
+					print_mean_y_true=True,print_mean_y_pred=True, metrics_to_print=None):
 		s = "Concept"
 		if self._idx is not None:
 			s += f" {self._idx}"
@@ -76,11 +85,17 @@ class Concept:
 		if print_up_neighbs and self._up_neighbs is not None:
 			s += f"upper neighbours (len: {len(self._up_neighbs)}): {pretty_str(self._up_neighbs)}\n"
 		s += f"level: {self._level}\n" if print_level and self._level is not None else ''
-		if print_mean_y:
-			if y_precision is None:
-				s += f"mean_y: {self._mean_y}\n"
-			else:
-				s += f"mean_y: {np.round(self._mean_y,y_precision)}\n"
+		s += f"pattern: {self._pattern}\n" if self._pattern is not None else ''
+		if print_mean_y_true and self._y_true_mean is not None:
+			s += f"mean_y_true: {np.round(self._y_true_mean,y_precision) if y_precision is not None else self._y_true_mean}\n"
+		if print_mean_y_pred and self._y_pred_mean is not None:
+			s += f"mean_y_pred: {np.round(self._y_pred_mean, y_precision) if y_precision is not None else self._y_pred_mean}\n"
+		if metrics_to_print is not None and self._metrics is not None:
+			s += 'Metrics\n'
+			for k,v in self._metrics.items():
+				if metrics_to_print == 'all' or k in metrics_to_print:
+					s+= f'\t{k}: {v}\n'
+
 		return s
 
 	def __str__(self):
@@ -103,7 +118,7 @@ class Concept:
 
 
 class Context:
-	def __init__(self, data, objs=None, attrs=None, y_vals=None, cat_attrs=None):
+	def __init__(self, data, objs=None, attrs=None, y_true=None, y_pred=None,):# cat_attrs=None):
 		if type(data) == list:
 			data = np.array(data)
 		
@@ -122,14 +137,27 @@ class Context:
 
 		assert data.dtype == bool, 'Only Boolean contexts are supported for now'
 
-		if y_vals is not None:
-			if type(y_vals) == pd.Series:
-				self._y_vals = y_vals.values
-			elif type(y_vals) == np.ndarray:
-				self._y_vals = y_vals
+		if y_true is not None:
+			if type(y_true) == pd.Series:
+				self._y_true = y_true.values
+			elif type(y_true) == np.ndarray:
+				self._y_true = y_true
 			else:
-				raise TypeError(f"DataType {type(y_vals)} is not understood. np.ndarray or pandas.Series is required")
-			assert len(y_vals) == len(data), f'Data and Y_vals have different num of objects ( Data: {len(data)}, y_vals: {len(y_vals)})'
+				raise TypeError(f"DataType {type(y_true)} is not understood. np.ndarray or pandas.Series is required")
+			assert len(y_true) == len(data), f'Data and Y_vals have different num of objects ( Data: {len(data)}, y_vals: {len(y_true)})'
+		else:
+			self._y_true = None
+
+		if y_pred is not None:
+			if type(y_pred) == pd.Series:
+				self._y_pred = y_pred.values
+			elif type(y_pred) == np.ndarray:
+				self._y_pred = y_pred
+			else:
+				raise TypeError(f"DataType {type(y_pred)} is not understood. np.ndarray or pandas.Series is required")
+			assert len(y_pred) == len(data), f'Data and Y_vals have different num of objects ( Data: {len(data)}, y_vals: {len(y_pred)})'
+		else:
+			self._y_pred = None
 
 		self._data_full = data
 		self._objs_full = objs
@@ -142,7 +170,7 @@ class Context:
 						[idx for idx,m in enumerate(attrs) if m in same_attrs.keys()]]
 		self._objs = np.array([g for idx, g in enumerate(objs) if g in same_objs.keys()])
 		self._attrs = np.array([m for idx,m in enumerate(attrs) if m in same_attrs.keys()])
-		self._cat_attrs = np.array([m for idx,m in enumerate(cat_attrs) if m in same_attrs.keys()]) if cat_attrs else None
+		#self._cat_attrs = np.array([m for idx,m in enumerate(cat_attrs) if m in same_attrs.keys()]) if cat_attrs else None
 
 		#ar = np.array([2 ** i for i in range(len(self._attrs))])
 		#self._objs_bit = [(g*ar).sum() for g in self._data]
@@ -310,19 +338,24 @@ class Context:
 
 
 class FormalManager:
-	def __init__(self, context, ds_obj=None, target_attr=None):
+	def __init__(self, context, ds_obj=None, target_attr=None, cat_feats=None):
 		self._context = context
+		ds_obj.index = ds_obj.index.astype(str)
 		self._ds_obj = ds_obj
 		self._concepts = None
 		self._target_attr = target_attr
 		self._top_concept = None
 		self._bottom_concept = None
+		self._cat_feats = cat_feats
 
 	def get_context(self):
 		return self._context
 
 	def get_concepts(self):
 		return self._concepts
+
+	def get_concept_by_id(self, id):
+		return self._concepts_dict[id]
 
 	def construct_concepts(self, algo='mit', max_iters_num=None, max_num_attrs=None, min_num_objs=None, use_tqdm=True):
 		if algo == 'CBO':
@@ -332,18 +365,22 @@ class FormalManager:
 		else:
 			raise ValueError('The only supported algorithm is CBO (CloseByOne')
 
-
-		concepts = set([Concept(
-			[g_ for g in c.get_extent() for g_ in [g]+list(self._context._same_objs[g])],
-			[m_ for m in c.get_intent() for m_ in [m]+list(self._context._same_attrs[m])],
-			idx
-		) for idx, c in enumerate(sorted(concepts, key=lambda x: len(x.get_intent())))])
-
-		if self._context._y_vals is not None:
-			for c in concepts:
-				c._mean_y = self._context._y_vals[np.isin(self._context.get_objs(), c.get_extent())].mean()
-        
+		new_concepts = set()
+		for idx, c in enumerate(sorted(concepts, key=lambda x: len(x.get_intent()))):
+			ext_ = [g_ for g in c.get_extent() for g_ in [g]+list(self._context._same_objs[g])]
+			int_ = [m_ for m in c.get_intent() for m_ in [m]+list(self._context._same_attrs[m])]
+			pattern = self._find_concept_pattern(c)  if self._ds_obj is not None else None
+			y_true = self._context._y_true[np.isin(self._context._objs_full, ext_)] if self._context._y_true is not None else None
+			y_pred = self._context._y_pred[np.isin(self._context._objs_full, ext_)] if self._context._y_pred is not None else None
+			metrics = self._calc_metrics(y_true, y_pred) if len(ext_) > 0 and y_true is not None and y_pred is not None else None
+			y_pred_mean = y_pred.mean() if y_pred is not None and len(y_pred)>0  else None
+			y_true_mean = y_true.mean() if y_true is not None and len(y_true) > 0 else None
+			new_concepts.add(Concept(ext_, int_, idx=idx, pattern=pattern,
+									 y_true_mean=y_true_mean, y_pred_mean=y_pred_mean, metrics=metrics ))
+		concepts = new_concepts
 		self._concepts = concepts
+
+		self._concepts_dict = {c._idx: c for c in concepts}
 
 		self._top_concept = [c for c in concepts if len(c.get_extent()) == len(self._context.get_objs())]
 		self._top_concept = self._top_concept[0] if len(self._top_concept) > 0 else None
@@ -360,6 +397,18 @@ class FormalManager:
 		self._lattice_mit = cntx_mit.lattice
 		concepts = {Concept(ext_, int_) for ext_, int_ in self._lattice_mit}
 		return concepts
+
+	def _calc_metrics(self, y_true, y_pred):
+		from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score, \
+			r2_score, mean_absolute_error, mean_squared_error
+		ms = {'accuracy': round(accuracy_score(y_true, y_pred),2),
+			 'precision': round(precision_score(y_true, y_pred),2),
+			 'recall': round(recall_score(y_true, y_pred),2),
+			 'r2': r2_score(y_true, y_pred),
+			  'mae': mean_absolute_error(y_true, y_pred),
+			  'mse': mean_squared_error(y_true, y_pred)
+		}
+		return ms
 
 	def _close_by_one(self, max_iters_num, max_num_attrs, min_num_objs, use_tqdm):
 		cntx = self._context
@@ -459,9 +508,10 @@ class FormalManager:
 		self._calc_concept_levels()
 		self._find_new_concept_objatr()
 
-	def get_plotly_fig(self, level_sort=None, y_precision=None, color_by=None, title=None,
+	def get_plotly_fig(self, level_sort=None, sort_by=None, y_precision=None, color_by=None, title=None,
 					   cbar_title=None, cmin=None, cmid=None, cmax=None, cmap='RdBu',
-					   new_attrs_lim=5, new_objs_lim=5):
+					   new_attrs_lim=5, new_objs_lim=5,
+					   metrics_to_print='all'):
 		connections_dict = {}
 		for c in self.get_concepts():
 			connections_dict[c._idx] = [ln_idx for ln_idx in c._low_neighbs]
@@ -480,8 +530,19 @@ class FormalManager:
 			cur_level_idx = cur_level_idx + 1 if cl == last_level else 1
 			last_level = cl
 			pos[c._idx] = (cur_level_idx - level_widths[cl] / 2 - 0.5, n_levels - cl)
+
+		def sort_feature(c, sort_by):
+			if sort_by == 'y_true':
+				return c._y_true_mean
+			if sort_by == 'y_pred':
+				return c._y_pred_mean
+			if c._metrics is not None:
+				for k, v in c._metrics.items():
+					if k == sort_by:
+						return v
+			return None
             
-		if level_sort is not None and self._context._y_vals is not None:
+		if level_sort is not None and sort_by is not None:
 			level_sort = n_levels//2 if level_sort == 'mean' else level_sort
 
 			cncpt_by_levels = {}
@@ -489,28 +550,31 @@ class FormalManager:
 				cncpt_by_levels[c._level] = cncpt_by_levels.get(c._level,[])+[c]
 			pos = {}
 
-			cl = level_sort
-			for c_l_idx, c in enumerate(sorted(cncpt_by_levels[level_sort],
-											   key=lambda c: c._mean_y if color_by=='mean_y'
-											   		else c._metric if color_by=='metric'
-											   		else None)):
-				pos[c._idx] = (c_l_idx - level_widths[cl]/2 + 0.5, n_levels - cl)
 
-			for cl in range(level_sort-1,-1,-1):
-				for c_l_idx,c in enumerate(cncpt_by_levels[cl]):
-					pos[c._idx] = (np.mean([pos[ln][0] for ln in c._low_neighbs if ln in pos]), n_levels-cl)
+				#raise ValueError(f'Unknown feature to sort by: {sort_by}')
 
-			for cl in range(level_sort+1,n_levels):
-				for c_l_idx,c in enumerate(cncpt_by_levels[cl]):
-					pos[c._idx] = (np.mean([pos[un][0] for un in c._up_neighbs if un in pos]), n_levels-cl)
+			if level_sort == 'all':
+				for cl in range(0, len(level_widths)):
+					for c_l_idx, c in enumerate(sorted(cncpt_by_levels[cl], key=lambda c: sort_feature(c, sort_by))):
+						pos[c._idx] = (c_l_idx - level_widths[cl]/2 + 0.5, n_levels - cl)
+			else:
+				cl = level_sort
+				for c_l_idx, c in enumerate(sorted(cncpt_by_levels[level_sort], key=lambda c: sort_feature(c, sort_by))):
+					pos[c._idx] = (c_l_idx - level_widths[cl]/2 + 0.5, n_levels - cl)
 
+				for cl in range(level_sort-1,-1,-1):
+					for c_l_idx,c in enumerate(cncpt_by_levels[cl]):
+						pos[c._idx] = (np.mean([pos[ln][0] for ln in c._low_neighbs if ln in pos]), n_levels-cl)
+
+				for cl in range(level_sort+1,n_levels):
+					for c_l_idx,c in enumerate(cncpt_by_levels[cl]):
+						pos[c._idx] = (np.mean([pos[un][0] for un in c._up_neighbs if un in pos]), n_levels-cl)
+
+			# center to 0
 			for cl in range(n_levels):
 				m = np.mean([pos[c._idx][0] for c in cncpt_by_levels[cl]])
-				for c in cncpt_by_levels[cl]:
-					pos[c._idx] = (pos[c._idx][0]-m,pos[c._idx][1])
-
-			for cl in range(n_levels):
 				for c_l_idx,c in enumerate(sorted(cncpt_by_levels[cl], key=lambda c: pos[c._idx][0])):
+					pos[c._idx] = (pos[c._idx][0] - m, pos[c._idx][1])
 					pos[c._idx] = (c_l_idx - level_widths[cl] / 2 + 0.5, n_levels - cl)
 
 		G = nx.from_dict_of_lists(connections_dict)
@@ -557,11 +621,15 @@ class FormalManager:
 		node_title = []
 		# for node, adjacencies in enumerate(G.adjacency()):
 		for node, adjacencies in G.adjacency():
-			c = concepts[node]            
-			node_color.append(c._mean_y if c._mean_y is not None else 'grey')
+			c = concepts[node]
+			node_color.append(sort_feature(c, color_by) if sort_feature(c,color_by) is not None else 'grey')
+			#node_color.append(c._mean_y if c._mean_y is not None else 'grey')
 			node_adjacencies.append(len(adjacencies))
 			# node_text.append('a\nbc')
-			node_text.append(c.pretty_repr(print_mean_y=True, y_precision=y_precision).replace('\n', '<br>')+\
+			node_text.append(c.pretty_repr(print_mean_y_true=True,
+										   print_mean_y_pred=True,
+										   metrics_to_print=metrics_to_print,
+										   y_precision=y_precision).replace('\n', '<br>')+\
 							 '')#f'\npos({pos[c._idx]})')
 			new_attrs_str = '' if len(c._new_attrs) == 0 else\
 				f"{','.join(c._new_attrs) if c._new_attrs else ''}" if len(c._new_attrs)<new_attrs_lim \
@@ -599,3 +667,26 @@ class FormalManager:
 							yaxis=dict(showgrid=False, zeroline=False, showticklabels=False))
 						)
 		return fig
+
+	def _find_concept_pattern(self, cncpt):
+		ds = self._ds_obj
+		cat_feats = self._cat_feats
+		cat_feats = cat_feats if cat_feats else []
+
+		if cncpt._extent is None or cncpt._intent is None:
+			return None
+		attrs = cncpt._intent
+		if not all([f in ds.columns for f in attrs]):
+			attrs = list(set([f.split('__')[0] for f in attrs]))
+
+		cds = ds.loc[cncpt._extent, attrs]
+		patrn = {}
+		for f in attrs:
+			if f in cat_feats or ds[f].dtype == bool:
+				s = cds[f].value_counts().sort_values(ascending=False)
+				s /= len(cds)
+				s = s.round(2)
+				patrn[f] = s.to_dict()
+			else:
+				patrn[f] = (cds[f].min(), cds[f].median(), cds[f].max())
+		return patrn
