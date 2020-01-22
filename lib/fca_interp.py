@@ -38,8 +38,8 @@ class Concept:
 		if self._title is not None:
 			s += f" '{self._title}'"
 		s += f"\n"
-		s += f"extent (len: {len(self._extent)}): {','.join([f'{g}' for g in self._extent]) if len(self._extent)>0 else 'emptyset'}\n"
-		s += f"intent (len: {len(self._intent)}): {','.join([f'{m}' for m in self._intent]) if len(self._intent)>0 else 'emptyset'}\n"
+		s += f"extent (len: {len(self._extent)}): {', '.join([f'{g}' for g in self._extent]) if len(self._extent)>0 else 'emptyset'}\n"
+		s += f"intent (len: {len(self._intent)}): {', '.join([f'{m}' for m in self._intent]) if len(self._intent)>0 else 'emptyset'}\n"
 		if self._new_objs:
 			s += f"new extent (len: {len(self._new_objs)}): {','.join([f'{g}' for g in self._new_objs]) if len(self._new_objs) > 0 else 'emptyset'}\n"
 		if self._new_attrs:
@@ -70,7 +70,7 @@ class Concept:
 			if len(lst)==0:
 				return 'emptyset'
 			else:
-				return ','.join([f'{g}' for g in lst[:lim]])+(',...' if len(lst)>lim else '')
+				return ', '.join([f'{g}' for g in lst[:lim]])+(',...' if len(lst)>lim else '')
 
 		s += f"extent (len: {len(self._extent)}): {pretty_str(self._extent)}\n"
 		s += f"intent (len: {len(self._intent)}): {pretty_str(self._intent)}\n"
@@ -95,8 +95,30 @@ class Concept:
 			for k,v in self._metrics.items():
 				if metrics_to_print == 'all' or k in metrics_to_print:
 					s+= f'\t{k}: {v}\n'
-
-		return s
+                    
+		pretty_s = ''
+		for line in s.split('\n'):
+			if len(line)<80:
+				pretty_s += line + '\n'
+			else:
+				pretty_line = ''
+				while ' ' in line and len(line)>80:
+					if len(pretty_line)>80:
+						pretty_s += pretty_line+'\n'
+						pretty_line = '\t'
+					#print(len(pretty_line),'|', pretty_line)
+					#print('---')
+					#print(len(line),'|', line)
+					#print('======')
+					pretty_line += line.split(' ')[0]+' '
+					line = ' '.join(line.split(' ')[1:])
+				#print(pretty_line)
+				#print(line)
+				#print('++++++++++++++++++')
+				#print('++++++++++++++++++')
+				pretty_s += pretty_line
+				pretty_s += line+'\n' if len(line)>0 else ''
+		return pretty_s
 
 	def __str__(self):
 		s = "Concept"
@@ -338,7 +360,7 @@ class Context:
 
 
 class FormalManager:
-	def __init__(self, context, ds_obj=None, target_attr=None, cat_feats=None):
+	def __init__(self, context, ds_obj=None, target_attr=None, cat_feats=None, task_type=None):
 		self._context = context
 		ds_obj.index = ds_obj.index.astype(str)
 		self._ds_obj = ds_obj
@@ -347,6 +369,7 @@ class FormalManager:
 		self._top_concept = None
 		self._bottom_concept = None
 		self._cat_feats = cat_feats
+		self._task_type = task_type
 
 	def get_context(self):
 		return self._context
@@ -372,7 +395,7 @@ class FormalManager:
 			pattern = self._find_concept_pattern(c)  if self._ds_obj is not None else None
 			y_true = self._context._y_true[np.isin(self._context._objs_full, ext_)] if self._context._y_true is not None else None
 			y_pred = self._context._y_pred[np.isin(self._context._objs_full, ext_)] if self._context._y_pred is not None else None
-			metrics = self._calc_metrics(y_true, y_pred) if len(ext_) > 0 and y_true is not None and y_pred is not None else None
+			metrics = self._calc_metrics(y_true, y_pred) if len(ext_) > 0 and all([x is not None for x in [y_true, y_pred, self._task_type]]) else None
 			y_pred_mean = y_pred.mean() if y_pred is not None and len(y_pred)>0  else None
 			y_true_mean = y_true.mean() if y_true is not None and len(y_true) > 0 else None
 			new_concepts.add(Concept(ext_, int_, idx=idx, pattern=pattern,
@@ -401,13 +424,21 @@ class FormalManager:
 	def _calc_metrics(self, y_true, y_pred):
 		from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score, \
 			r2_score, mean_absolute_error, mean_squared_error
-		ms = {'accuracy': round(accuracy_score(y_true, y_pred),2),
-			 'precision': round(precision_score(y_true, y_pred),2),
-			 'recall': round(recall_score(y_true, y_pred),2),
-			 'r2': r2_score(y_true, y_pred),
-			  'mae': mean_absolute_error(y_true, y_pred),
-			  'mse': mean_squared_error(y_true, y_pred)
-		}
+		if self._task_type=='regression':
+			ms = {
+				'r2': r2_score(y_true, y_pred),
+				'mae': mean_absolute_error(y_true, y_pred),
+				'mse': mean_squared_error(y_true, y_pred),
+				'mape': np.mean(np.abs(y_true-y_pred)/y_true),
+			}
+		elif self._task_type=='binary classification':
+			ms = {
+				'accuracy': round(accuracy_score(y_true, y_pred),2),
+				'precision': round(precision_score(y_true, y_pred),2),
+				'recall': round(recall_score(y_true, y_pred),2),
+			}
+		else:
+			raise ValueError(f"Given task type {self._task_type} is not supported. Possible values are 'regression', 'binary classification'")
 		return ms
 
 	def _close_by_one(self, max_iters_num, max_num_attrs, min_num_objs, use_tqdm):
@@ -511,7 +542,7 @@ class FormalManager:
 	def get_plotly_fig(self, level_sort=None, sort_by=None, y_precision=None, color_by=None, title=None,
 					   cbar_title=None, cmin=None, cmid=None, cmax=None, cmap='RdBu',
 					   new_attrs_lim=5, new_objs_lim=5,
-					   metrics_to_print='all'):
+					   metrics_to_print='all', figsize=None):
 		connections_dict = {}
 		for c in self.get_concepts():
 			connections_dict[c._idx] = [ln_idx for ln_idx in c._low_neighbs]
@@ -664,7 +695,10 @@ class FormalManager:
 							#    xref="paper", yref="paper",
 							#    x=0.005, y=-0.002 ) ],
 							xaxis=dict(showgrid=False, zeroline=False, showticklabels=False),
-							yaxis=dict(showgrid=False, zeroline=False, showticklabels=False))
+							yaxis=dict(showgrid=False, zeroline=False, showticklabels=False),
+							width = figsize[0] if figsize is not None else 1000,
+							height = figsize[1] if figsize is not None else 500,
+						)
 						)
 		return fig
 
