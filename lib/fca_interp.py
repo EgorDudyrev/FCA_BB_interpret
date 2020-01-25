@@ -205,7 +205,7 @@ class Context:
 			if i in saw_attrs:
 				continue
 			idxs = np.arange(i + 1, data.shape[1])[(data.T[i] == data.T[i + 1:]).mean(1) == 1]
-			idxs = [idx for idx in idxs if idx not in saw_attr]
+			idxs = [idx for idx in idxs if idx not in saw_attrs]
 			same_attrs[i] = idxs
 			for idx in idxs:
 				saw_attrs.add(idx)
