@@ -8,9 +8,11 @@ import plotly.graph_objects as go
 
 class Concept:
 	def __init__(self, extent, intent, idx=None, pattern=None, title=None,
-				 y_true_mean=None, y_pred_mean=None, metrics=None):
+				 y_true_mean=None, y_pred_mean=None, metrics=None, extent_short=None, intent_short=None):
 		self._extent = np.array(extent)
 		self._intent = np.array(intent)
+		self._extent_short = np.array(extent_short) if extent_short is not None else self._extent
+		self._intent_short = np.array(intent_short) if intent_short is not None else self._intent
 		self._low_neighbs = None
 		self._up_neighbs = None
 		self._idx = idx
@@ -131,7 +133,8 @@ class Concept:
 
 	def is_subconcept_of(self, c):
 		"""if a is subconcept of b, a<=b"""
-		return all([g in c._extent for g in self._extent]) and all([m in self._intent for m in c._intent])
+		return all([g in c._extent_short for g in self._extent_short])\
+			   	and all([m in self._intent_short for m in c._intent_short])
 		#return self._is_subconcept_of_bit(c)
 
 	def _is_subconcept_of_bit(self, c):
@@ -362,7 +365,8 @@ class Context:
 class FormalManager:
 	def __init__(self, context, ds_obj=None, target_attr=None, cat_feats=None, task_type=None):
 		self._context = context
-		ds_obj.index = ds_obj.index.astype(str)
+		if ds_obj is not None:
+			ds_obj.index = ds_obj.index.astype(str)
 		self._ds_obj = ds_obj
 		self._concepts = None
 		self._target_attr = target_attr
@@ -390,8 +394,10 @@ class FormalManager:
 
 		new_concepts = set()
 		for idx, c in enumerate(sorted(concepts, key=lambda x: len(x.get_intent()))):
-			ext_ = [g_ for g in c.get_extent() for g_ in [g]+list(self._context._same_objs[g])]
-			int_ = [m_ for m in c.get_intent() for m_ in [m]+list(self._context._same_attrs[m])]
+			ext_short = c.get_extent()
+			int_short = c.get_intent()
+			ext_ = [g_ for g in ext_short for g_ in [g]+list(self._context._same_objs[g])]
+			int_ = [m_ for m in int_short for m_ in [m]+list(self._context._same_attrs[m])]
 			pattern = self._find_concept_pattern(c)  if self._ds_obj is not None else None
 			y_true = self._context._y_true[np.isin(self._context._objs_full, ext_)] if self._context._y_true is not None else None
 			y_pred = self._context._y_pred[np.isin(self._context._objs_full, ext_)] if self._context._y_pred is not None else None
@@ -399,7 +405,8 @@ class FormalManager:
 			y_pred_mean = y_pred.mean() if y_pred is not None and len(y_pred)>0  else None
 			y_true_mean = y_true.mean() if y_true is not None and len(y_true) > 0 else None
 			new_concepts.add(Concept(ext_, int_, idx=idx, pattern=pattern,
-									 y_true_mean=y_true_mean, y_pred_mean=y_pred_mean, metrics=metrics ))
+									 y_true_mean=y_true_mean, y_pred_mean=y_pred_mean, metrics=metrics,
+									 extent_short=ext_short, intent_short=int_short))
 		concepts = new_concepts
 		self._concepts = concepts
 
@@ -427,6 +434,8 @@ class FormalManager:
 		if self._task_type=='regression':
 			ms = {
 				'r2': r2_score(y_true, y_pred),
+				'me': np.mean(y_true-y_pred),
+				'ame': np.abs(np.mean(y_true-y_pred)),
 				'mae': mean_absolute_error(y_true, y_pred),
 				'mse': mean_squared_error(y_true, y_pred),
 				'mape': np.mean(np.abs(y_true-y_pred)/y_true),
@@ -436,6 +445,8 @@ class FormalManager:
 				'accuracy': round(accuracy_score(y_true, y_pred),2),
 				'precision': round(precision_score(y_true, y_pred),2),
 				'recall': round(recall_score(y_true, y_pred),2),
+				'neg_precision': round(precision_score(1-y_true, 1-y_pred), 2),
+				'neg_recall': round(recall_score(1-y_true, 1-y_pred), 2),
 			}
 		else:
 			raise ValueError(f"Given task type {self._task_type} is not supported. Possible values are 'regression', 'binary classification'")
