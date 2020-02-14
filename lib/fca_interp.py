@@ -6,6 +6,7 @@ import concepts as concepts_mit
 import networkx as nx
 import plotly.graph_objects as go
 
+
 class Concept:
 	def __init__(self, extent, intent, idx=None, pattern=None, title=None,
 				 y_true_mean=None, y_pred_mean=None, metrics=None, extent_short=None, intent_short=None):
@@ -382,7 +383,7 @@ class FormalManager:
 		return self._concepts
 
 	def get_concept_by_id(self, id):
-		return self._concepts_dict[id]
+		return [c for c in self._concepts if c._idx==id][0]
 
 	def construct_concepts(self, algo='mit', max_iters_num=None, max_num_attrs=None, min_num_objs=None, use_tqdm=True):
 		if algo == 'CBO':
@@ -393,7 +394,7 @@ class FormalManager:
 			raise ValueError('The only supported algorithm is CBO (CloseByOne')
 
 		new_concepts = set()
-		for idx, c in enumerate(sorted(concepts, key=lambda x: len(x.get_intent()))):
+		for idx, c in enumerate(sorted(concepts, key=lambda c: (len(c.get_intent()), ','.join(c.get_intent())))):
 			ext_short = c.get_extent()
 			int_short = c.get_intent()
 			ext_ = [g_ for g in ext_short for g_ in [g]+list(self._context._same_objs[g])]
@@ -410,13 +411,37 @@ class FormalManager:
 		concepts = new_concepts
 		self._concepts = concepts
 
-		self._concepts_dict = {c._idx: c for c in concepts}
-
 		self._top_concept = [c for c in concepts if len(c.get_extent()) == len(self._context.get_objs())]
 		self._top_concept = self._top_concept[0] if len(self._top_concept) > 0 else None
 
 		self._bottom_concept = [c for c in concepts if len(c.get_intent()) == len(self._context.get_attrs())]
 		self._bottom_concept = self._bottom_concept[0] if len(self._bottom_concept)>0 else None
+
+	def delete_concept(self, c_idx):
+		c = self.get_concept_by_id(c_idx)
+		upns, lns = c._up_neighbs, c._low_neighbs
+		if upns is None or len(upns) == 0:
+			raise KeyError(f'Cannot delete concept {c_idx}. It may be supremum')
+
+		#if lns is None or len(lns) == 0:
+		#	raise KeyError(f'Cannot delete concept {c_idx}. It may be infinum')
+
+		for upn_id in upns:
+			upn = self.get_concept_by_id(upn_id)
+			upn._low_neighbs.remove(c_idx)
+			upn._low_neighbs = upn._low_neighbs | lns
+
+		for ln_id in lns:
+			ln = self.get_concept_by_id(ln_id)
+			ln._up_neighbs.remove(c_idx)
+			ln._up_neighbs = ln._up_neighbs | upns
+		self._concepts = [c_ for c_ in self._concepts if c_ != c]
+
+		idx_map = {c_._idx: i for i, c_ in enumerate(self._concepts)}
+		for c_ in self._concepts:
+			c_._idx = idx_map[c_._idx]
+			c_._up_neighbs = {idx_map[up_id] for up_id in c_._up_neighbs}
+			c_._low_neighbs = {idx_map[ln_id] for ln_id in c_._low_neighbs}
 
 	def _concepts_by_mit(self):
 		cntx_mit = concepts_mit.Context(self._context._objs,#f"g{x}" for x in range(len(self._context.get_objs()))],
@@ -431,7 +456,7 @@ class FormalManager:
 	def _calc_metrics(self, y_true, y_pred):
 		from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score, \
 			r2_score, mean_absolute_error, mean_squared_error
-		if self._task_type=='regression':
+		if self._task_type == 'regression':
 			ms = {
 				'r2': r2_score(y_true, y_pred),
 				'me': np.mean(y_true-y_pred),
@@ -440,7 +465,7 @@ class FormalManager:
 				'mse': mean_squared_error(y_true, y_pred),
 				'mape': np.mean(np.abs(y_true-y_pred)/y_true),
 			}
-		elif self._task_type=='binary classification':
+		elif self._task_type == 'binary classification':
 			ms = {
 				'accuracy': round(accuracy_score(y_true, y_pred),2),
 				'precision': round(precision_score(y_true, y_pred),2),
