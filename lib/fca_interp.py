@@ -9,7 +9,8 @@ import plotly.graph_objects as go
 
 class Concept:
 	def __init__(self, extent, intent, idx=None, pattern=None, title=None,
-				 y_true_mean=None, y_pred_mean=None, metrics=None, extent_short=None, intent_short=None):
+				 y_true_mean=None, y_pred_mean=None, metrics=None, extent_short=None, intent_short=None,
+				 is_monotonic = False):
 		self._extent = np.array(extent)
 		self._intent = np.array(intent)
 		self._extent_short = np.array(extent_short) if extent_short is not None else self._extent
@@ -24,7 +25,8 @@ class Concept:
 		self._pattern = pattern
 		self._y_true_mean=y_true_mean
 		self._y_pred_mean=y_pred_mean
-		self._metrics = metrics
+		self._metrics = metrics if metrics is not None else {}
+		self._is_monotonic = is_monotonic
 		#self._extent_bit = (2**self._extent).sum() if len(self._extent)>0 else 0
 		#self._intent_bit = (2**self._intent).sum() if len(self._intent)>0 else 0
 
@@ -134,8 +136,12 @@ class Concept:
 
 	def is_subconcept_of(self, c):
 		"""if a is subconcept of b, a<=b"""
-		return all([g in c._extent_short for g in self._extent_short])\
-			   	and all([m in self._intent_short for m in c._intent_short])
+		if c._is_monotonic:
+			return all([g in self._extent_short for g in c._extent_short ])\
+				   and all([m in self._intent_short for m in c._intent_short])
+		else:
+			return all([g in c._extent_short for g in self._extent_short])\
+					and all([m in self._intent_short for m in c._intent_short])
 		#return self._is_subconcept_of_bit(c)
 
 	def _is_subconcept_of_bit(self, c):
@@ -385,7 +391,8 @@ class FormalManager:
 	def get_concept_by_id(self, id):
 		return [c for c in self._concepts if c._idx==id][0]
 
-	def construct_concepts(self, algo='mit', max_iters_num=None, max_num_attrs=None, min_num_objs=None, use_tqdm=True):
+	def construct_concepts(self, algo='mit', max_iters_num=None, max_num_attrs=None, min_num_objs=None, use_tqdm=True,
+						   is_monotonic=False):
 		if algo == 'CBO':
 			concepts = self._close_by_one(max_iters_num, max_num_attrs, min_num_objs, use_tqdm)
 		elif algo == 'mit':
@@ -393,13 +400,16 @@ class FormalManager:
 		else:
 			raise ValueError('The only supported algorithm is CBO (CloseByOne')
 
+		if is_monotonic:
+			concepts = {Concept([g for g in self._context._objs if g not in  c._extent], c._intent) for c in concepts}
+
 		new_concepts = set()
 		for idx, c in enumerate(sorted(concepts, key=lambda c: (len(c.get_intent()), ','.join(c.get_intent())))):
 			ext_short = c.get_extent()
 			int_short = c.get_intent()
 			ext_ = [g_ for g in ext_short for g_ in [g]+list(self._context._same_objs[g])]
 			int_ = [m_ for m in int_short for m_ in [m]+list(self._context._same_attrs[m])]
-			pattern = self._find_concept_pattern(c)  if self._ds_obj is not None else None
+			pattern = self._find_concept_pattern(c) if self._ds_obj is not None else None
 			y_true = self._context._y_true[np.isin(self._context._objs_full, ext_)] if self._context._y_true is not None else None
 			y_pred = self._context._y_pred[np.isin(self._context._objs_full, ext_)] if self._context._y_pred is not None else None
 			metrics = self._calc_metrics(y_true, y_pred) if len(ext_) > 0 and all([x is not None for x in [y_true, y_pred, self._task_type]]) else None
@@ -407,7 +417,8 @@ class FormalManager:
 			y_true_mean = y_true.mean() if y_true is not None and len(y_true) > 0 else None
 			new_concepts.add(Concept(ext_, int_, idx=idx, pattern=pattern,
 									 y_true_mean=y_true_mean, y_pred_mean=y_pred_mean, metrics=metrics,
-									 extent_short=ext_short, intent_short=int_short))
+									 extent_short=ext_short, intent_short=int_short,
+									 is_monotonic=is_monotonic))
 		concepts = new_concepts
 		self._concepts = concepts
 
@@ -437,7 +448,9 @@ class FormalManager:
 			ln._up_neighbs = ln._up_neighbs | upns
 		self._concepts = [c_ for c_ in self._concepts if c_ != c]
 
-		idx_map = {c_._idx: i for i, c_ in enumerate(self._concepts)}
+		idx_map = {c_._idx: i for i, c_ in
+				   enumerate(sorted(self._concepts, key=lambda c_: (len(c_.get_intent()), ','.join(c_.get_intent()))))
+				   }
 		for c_ in self._concepts:
 			c_._idx = idx_map[c_._idx]
 			c_._up_neighbs = {idx_map[up_id] for up_id in c_._up_neighbs}
@@ -563,6 +576,7 @@ class FormalManager:
 
 	def _calc_concept_levels(self):
 		concepts = sorted(self._concepts, key=lambda c: c._idx)
+		#concepts = sorted(self._concepts, key=lambda c: (len(c.get_intent()), ','.join(c.get_intent())))
 		if self._top_concept is None:
 			return
 		#concepts_to_check = [self._top_concept]
