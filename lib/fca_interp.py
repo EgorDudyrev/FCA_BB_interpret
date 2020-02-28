@@ -659,14 +659,13 @@ class FormalManager:
 					pos[c._idx] = (c_l_idx - level_widths[cl] / 2 + 0.5, n_levels - cl)
 
 		G = nx.from_dict_of_lists(connections_dict)
-		for c in concepts:
-			G.node[c._idx]['pos'] = pos[c._idx]
+		nx.set_node_attributes(G, 'pos', {c._idx:pos[c._idx] for c in concepts})
 
-		edge_x = [y for edge in G.edges for y in [G.nodes[edge[0]]['pos'][0], G.nodes[edge[1]]['pos'][0], None]]
-		edge_y = [y for edge in G.edges for y in [G.nodes[edge[0]]['pos'][1], G.nodes[edge[1]]['pos'][1], None]]
+		edge_x = [y for edge in G.edges() for y in [pos[edge[0]][0], pos[edge[1]][0], None]]
+		edge_y = [y for edge in G.edges() for y in [pos[edge[0]][1], pos[edge[1]][1], None]]
 
-		node_x = [G.nodes[node]['pos'][0] for node in G.nodes]
-		node_y = [G.nodes[node]['pos'][1] for node in G.nodes]
+		node_x = [pos[node][0] for node in G.nodes()]
+		node_y = [pos[node][1] for node in G.nodes()]
 
 		edge_trace = go.Scatter(
 			x=edge_x, y=edge_y,
@@ -701,11 +700,10 @@ class FormalManager:
 		node_color = []
 		node_title = []
 		# for node, adjacencies in enumerate(G.adjacency()):
-		for node, adjacencies in G.adjacency():
+		for node in G.nodes():
 			c = concepts[node]
 			node_color.append(sort_feature(c, color_by) if sort_feature(c,color_by) is not None else 'grey')
 			#node_color.append(c._mean_y if c._mean_y is not None else 'grey')
-			node_adjacencies.append(len(adjacencies))
 			# node_text.append('a\nbc')
 			node_text.append(c.pretty_repr(print_mean_y_true=True,
 										   print_mean_y_pred=True,
