@@ -577,8 +577,10 @@ class FormalManager:
 	def _calc_concept_levels(self):
 		concepts = sorted(self._concepts, key=lambda c: c._idx)
 		#concepts = sorted(self._concepts, key=lambda c: (len(c.get_intent()), ','.join(c.get_intent())))
-		if self._top_concept is None:
-			return
+		#if self._top_concept is None:
+		#	return
+		self._top_concept = [c for c in concepts if len(c.get_extent()) == len(self._context.get_objs())]
+		self._top_concept = self._top_concept[0] if len(self._top_concept) > 0 else None
 		#concepts_to_check = [self._top_concept]
 		concepts[0]._level = 0
 		for c in concepts[1:]:
