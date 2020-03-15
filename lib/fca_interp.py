@@ -392,13 +392,17 @@ class FormalManager:
 		return [c for c in self._concepts if c._idx==id][0]
 
 	def construct_concepts(self, algo='mit', max_iters_num=None, max_num_attrs=None, min_num_objs=None, use_tqdm=True,
-						   is_monotonic=False):
+						   is_monotonic=False,stop_on_strong_hyp=False, stop_after_strong_hyp=False):
 		if algo == 'CBO':
-			concepts = self._close_by_one(max_iters_num, max_num_attrs, min_num_objs, use_tqdm)
+			concepts = self._close_by_one(max_iters_num, max_num_attrs, min_num_objs, use_tqdm,stop_on_strong_hyp=stop_on_strong_hyp, stop_after_strong_hyp=stop_after_strong_hyp,is_monotonic=is_monotonic)
+			print([len(c.get_extent()) for c in concepts])
+			concepts = {Concept(tuple(self._context.get_objs()[c.get_extent()]) if len(c.get_extent())>0 else tuple() ,
+								tuple(self._context.get_attrs()[c.get_intent()]) if len(c.get_intent())>0 else tuple())
+						for c in concepts}
 		elif algo == 'mit':
 			concepts = self._concepts_by_mit()
 		else:
-			raise ValueError('The only supported algorithm is CBO (CloseByOne')
+			raise ValueError('The only supported algorithm is CBO (CloseByOne)')
 
 		if is_monotonic:
 			concepts = {Concept([g for g in self._context._objs if g not in  c._extent], c._intent) for c in concepts}
@@ -437,15 +441,17 @@ class FormalManager:
 		#if lns is None or len(lns) == 0:
 		#	raise KeyError(f'Cannot delete concept {c_idx}. It may be infinum')
 
-		for upn_id in upns:
-			upn = self.get_concept_by_id(upn_id)
-			upn._low_neighbs.remove(c_idx)
-			upn._low_neighbs = upn._low_neighbs | lns
+		if upns is not None:        
+			for upn_id in upns:
+				upn = self.get_concept_by_id(upn_id)
+				upn._low_neighbs.remove(c_idx)
+				upn._low_neighbs = upn._low_neighbs | lns
 
-		for ln_id in lns:
-			ln = self.get_concept_by_id(ln_id)
-			ln._up_neighbs.remove(c_idx)
-			ln._up_neighbs = ln._up_neighbs | upns
+		if lns is not None:                
+			for ln_id in lns:
+				ln = self.get_concept_by_id(ln_id)
+				ln._up_neighbs.remove(c_idx)
+				ln._up_neighbs = ln._up_neighbs | upns
 		self._concepts = [c_ for c_ in self._concepts if c_ != c]
 
 		idx_map = {c_._idx: i for i, c_ in
@@ -490,7 +496,7 @@ class FormalManager:
 			raise ValueError(f"Given task type {self._task_type} is not supported. Possible values are 'regression', 'binary classification'")
 		return ms
 
-	def _close_by_one(self, max_iters_num, max_num_attrs, min_num_objs, use_tqdm):
+	def _close_by_one(self, max_iters_num, max_num_attrs, min_num_objs, use_tqdm, stop_on_strong_hyp=False, stop_after_strong_hyp=False, is_monotonic=False):
 		cntx = self._context
 		n_attrs = len(cntx.get_attrs())
 		combs_to_check = [[]]
@@ -531,7 +537,14 @@ class FormalManager:
 
 			concepts.add(Concept(ext_, int_))
 			saved_ints.add(tuple(int_))
-			new_combs = [int_ + [x] for x in range((comb[-1] if len(comb) > 0 else -1) + 1, n_attrs) if x not in int_]
+			flg = np.isin(self._context._objs_full, ext_) 
+			mpred = self._context._y_pred[flg if not is_monotonic else ~flg].mean()
+			if stop_on_strong_hyp and mpred in [0,1]:
+				new_combs = []
+			elif stop_after_strong_hyp and mpred not in [0,1] and len(int_)>0:
+				new_combs = []
+			else:
+				new_combs = [int_ + [x] for x in range((comb[-1] if len(comb) > 0 else -1) + 1, n_attrs) if x not in int_]
 			combs_to_check = new_combs + combs_to_check
 			if use_tqdm:
 				t.update()
