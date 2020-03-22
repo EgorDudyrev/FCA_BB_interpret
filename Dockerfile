@@ -27,6 +27,7 @@ RUN conda update --all
 RUN conda install -y -c conda-forge catboost=0.22
 RUN pip install concepts==0.9.1
 RUN conda install -y -c plotly plotly=4.5.4
+RUN conda install -y -c anaconda networkx=2.4
 
 
 # Configuring access to Jupyter

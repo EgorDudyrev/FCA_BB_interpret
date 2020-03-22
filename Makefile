@@ -20,4 +20,5 @@ run:
 		--net=host \
 		--ipc=host \
 		--name=$(NAME) \
+		-v "$(PWD):/opt" \
 		$(NAME)
