@@ -603,13 +603,13 @@ class FormalManager:
 
     def _construct_lattice_connections(self, use_tqdm=True):
         n_concepts = len(self._concepts)
-        cncpts_map = {c._idx: c for c in self._concepts}
-        all_low_neighbs = {c._idx: set() for c in self._concepts}
+        cncpts_map = {c.get_id(): c for c in self._concepts}
+        all_low_neighbs = {c.get_id(): set() for c in self._concepts}
 
-        for cncpt_idx in tqdm(range(n_concepts - 1, -1, -1), disable=not use_tqdm):
+        for cncpt_idx in tqdm(sorted(cncpts_map.keys(), key=lambda idx: -idx), disable=not use_tqdm):
             concept = cncpts_map[cncpt_idx]
             concept._low_neighbs = set()
-            possible_neighbs = set(range(cncpt_idx + 1, n_concepts))
+            possible_neighbs = set([idx for idx in cncpts_map.keys() if idx>cncpt_idx])
 
             while len(possible_neighbs) > 0:
                 pn_idx = min(possible_neighbs)
@@ -645,9 +645,11 @@ class FormalManager:
 
         self._top_concept = concepts[0]
         # concepts_to_check = [self._top_concept]
-        concepts[0]._level = 0
-        for c in concepts[1:]:
-            c._level = max([concepts[un]._level for un in c._up_neighbs]) + 1
+        for c in concepts:
+            if c.get_upper_neighbs() is None or len(c.get_upper_neighbs())==0:
+                c._level = 0
+            else:
+                c._level = max([self.get_concept_by_id(un_id)._level for un_id in c.get_upper_neighbs()]) + 1
 
     def construct_lattice(self, use_tqdm=False):
         self._construct_lattice_connections(use_tqdm)
