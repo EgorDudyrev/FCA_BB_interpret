@@ -85,7 +85,7 @@ class Concept:
                                (self._up_neighbs, 'upper neighbours'), ]:
             s += repr_set(set_, set_name)
 
-        for k, v in self._metrics:
+        for k, v in self._metrics.items():
             s += f'metric {k} = {v}\n'
 
         return s
@@ -105,6 +105,8 @@ class Concept:
             set_, set_name, flg = t
             if not flg:
                 continue
+            set_ = {x.replace('__is__', '=').replace('__not__', '!=').replace('__lt__', '<').replace('__geq__', '>=')
+                    for x in set_}
             s += repr_set(set_, set_name, lim=set_limit)
 
         for k in metrics_to_print:
@@ -374,7 +376,40 @@ class Context:
             for c in cs:
                 bin_ds[f"{f}__is__{c}"] = ds[f] == c
                 bin_ds[f"{f}__not__{c}"] = ~bin_ds[f"{f}__is__{c}"]
+
+        bin_ds = bin_ds.astype(bool)
         return bin_ds, feat_orders
+
+    @staticmethod
+    def test_feats(bin_ds, fs, y, metric, n_estimators=100):
+        from sklearn.ensemble import RandomForestClassifier, RandomForestRegressor
+        if set(y) == {0, 1}:
+            rf = RandomForestClassifier(n_estimators=n_estimators)
+        else:
+            rf = RandomForestRegressor(n_estimators=n_estimators)
+
+        rf.fit(bin_ds[fs], y)
+        m = metric(y, rf.predict(bin_ds[fs]))
+        s = pd.Series(rf.feature_importances_, index=fs).sort_values(ascending=False)
+        return m, s
+
+    @classmethod
+    def squeeze_bin_dataset(cls, bin_ds, y, metric, metric_lim, use_tqdm=False, n_estimators=100):
+        fs = bin_ds.columns
+        max_metric = cls.test_feats(bin_ds, fs, y, metric, n_estimators)[0]
+        assert max_metric >= metric_lim, f'Target metric limit is unreachable (max is {max_metric})'
+
+        for i in tqdm(range(len(bin_ds.columns)), disable=not use_tqdm):
+            for f in fs[::-1]:
+                fs_ = [f_ for f_ in fs if f_ != f]
+                ac, s = cls.test_feats(bin_ds, fs_, y, metric, n_estimators)
+
+                if ac >= metric_lim:
+                    fs = list(s.index)
+                    break
+            else:
+                break
+        return fs
 
 
 class FormalManager:
@@ -405,11 +440,10 @@ class FormalManager:
         return sorted(concepts, key=lambda c: (len(c.get_intent()), ','.join(c.get_intent())))
 
     def construct_concepts(self, algo='mit', max_iters_num=None, max_num_attrs=None, min_num_objs=None, use_tqdm=True,
-                           is_monotonic=False, stop_on_strong_hyp=False, stop_after_strong_hyp=False):
+                           is_monotonic=False):
         if algo == 'CBO':
             concepts = self._close_by_one(max_iters_num, max_num_attrs, min_num_objs, use_tqdm,
-                                          stop_on_strong_hyp=stop_on_strong_hyp,
-                                          stop_after_strong_hyp=stop_after_strong_hyp, is_monotonic=is_monotonic)
+                                          is_monotonic=is_monotonic)
             concepts = {Concept(tuple(self._context.get_objs(is_full=False)[c.get_extent()])
                                     if len(c.get_extent()) > 0 else tuple(),
                                 tuple(self._context.get_attrs()[c.get_intent()])
@@ -445,8 +479,8 @@ class FormalManager:
     def delete_concept(self, c_idx):
         c = self.get_concept_by_id(c_idx)
         upns, lns = c.get_upper_neighbs(), c.get_lower_neighbs()
-        if upns is None or len(upns) == 0:
-            raise KeyError(f'Cannot delete concept {c_idx}. It may be supremum')
+        #if upns is None or len(upns) == 0:
+        #    raise KeyError(f'Cannot delete concept {c_idx}. It may be supremum')
 
         # if lns is None or len(lns) == 0:
         #	raise KeyError(f'Cannot delete concept {c_idx}. It may be infinum')
@@ -505,13 +539,13 @@ class FormalManager:
             }
         else:
             raise ValueError(
-                f"Given task type {self._task_type} is not supported. Possible values are 'regression', 'binary classification'")
+                f"Given task type {self._task_type} is not supported. Possible values are 'regression',"
+                f"'binary classification'")
         ms['y_pred_mean'] = np.mean(y_pred)
         ms['y_true_mean'] = np.mean(y_true)
         return ms
 
-    def _close_by_one(self, max_iters_num, max_num_attrs, min_num_objs, use_tqdm, stop_on_strong_hyp=False,
-                      stop_after_strong_hyp=False, is_monotonic=False):
+    def _close_by_one(self, max_iters_num, max_num_attrs, min_num_objs, use_tqdm, is_monotonic=False):
         cntx = self._context
         n_attrs = len(cntx.get_attrs())
         combs_to_check = [[]]
@@ -552,15 +586,8 @@ class FormalManager:
 
             concepts.add(Concept(ext_, int_))
             saved_ints.add(tuple(int_))
-            flg = np.isin(self._context._objs_full, ext_)
-            mpred = self._context._y_pred[flg if not is_monotonic else ~flg].mean()
-            if stop_on_strong_hyp and mpred in [0, 1]:
-                new_combs = []
-            elif stop_after_strong_hyp and mpred not in [0, 1] and len(int_) > 0:
-                new_combs = []
-            else:
-                new_combs = [int_ + [x] for x in range((comb[-1] if len(comb) > 0 else -1) + 1, n_attrs) if
-                             x not in int_]
+
+            new_combs = [int_ + [x] for x in range((comb[-1] if len(comb) > 0 else -1) + 1, n_attrs) if x not in int_]
             combs_to_check = new_combs + combs_to_check
             if use_tqdm:
                 t.update()
@@ -600,10 +627,18 @@ class FormalManager:
     def _find_new_concept_objatr(self):
         cncpt_dict = {c._idx: c for c in self._concepts}
         for c in self._concepts:
-            c._new_attrs = tuple(
-                set(c.get_intent()) - {m for un_idx in c.get_upper_neighbs() for m in cncpt_dict[un_idx].get_intent()})
-            c._new_objs = tuple(
-                set(c.get_extent()) - {m for ln_idx in c.get_lower_neighbs() for m in cncpt_dict[ln_idx].get_extent()})
+            if c.get_upper_neighbs() is not None:
+                c._new_attrs = tuple(
+                    set(c.get_intent()) - {m for un_idx in c.get_upper_neighbs()
+                                           for m in cncpt_dict[un_idx].get_intent()})
+            else:
+                c._new_attrs = tuple(c.get_intent())
+            if c.get_lower_neighbs() is not None:
+                c._new_objs = tuple(
+                    set(c.get_extent()) - {m for ln_idx in c.get_lower_neighbs()
+                                           for m in cncpt_dict[ln_idx].get_extent()})
+            else:
+                c._new_objs = tuple(c.get_extent())
 
     def _calc_concept_levels(self):
         concepts = self.sort_concepts(self._concepts)
@@ -773,3 +808,44 @@ class FormalManager:
                         )
                         )
         return fig
+
+    def calc_stab_bounds(self, cidx,):
+        c = self.get_concept_by_id(cidx)
+        lns = c.get_lower_neighbs()
+        difs = np.array(
+            sorted([len(set(c.get_extent()) - set(self.get_concept_by_id(didx).get_extent())) for didx in lns])
+            ).astype(float)
+        minb = 1 - sum(1 / (2 ** difs))
+        maxb = 1 - 1 / (2 ** difs[0])
+        return minb, maxb, difs[0]
+
+    def calc_stability_approx(self, use_tqdm=False):
+        for c in tqdm(self.get_concepts(), disable=not use_tqdm):
+            if len(c.get_lower_neighbs()) > 0:
+                minb, maxb, mindif = self.calc_stab_bounds(c.get_id())
+            elif len(c.get_extent()) < 0: # TODO: Write function to calculate real stability
+                pass
+                #print('calc real stability for idx', c.get_id())
+                #minb = get_stability(c._idx, fm_bank)
+                #maxb = minb
+                #mindif = None
+            else:
+                # raise ValueError(f'Too big extent to calc pure stability ({c._idx} concept)')
+                #print((f'Too big extent to calc pure stability ({c._idx} concept)'))
+                minb, maxb, mindif = [None] * 3
+            c._metrics['stab_min_bound'] = minb
+            c._metrics['stab_max_bound'] = maxb
+            c._metrics['log_stab_min_bound'] = -np.log2(1 - minb) if minb is not None else None
+            c._metrics['log_stab_max_bound'] = -np.log2(1 - maxb) if maxb is not None else None
+            c._metrics['lstab_min_bound'] = mindif - len(self.get_context().get_attrs(is_full=True))\
+                if mindif is not None else None
+
+    def calc_strongness(self, cntx_full, use_tqdm=False):
+        for c in tqdm(self.get_concepts(), disable=not use_tqdm):
+            c._metrics['strongness'] = len(c.get_extent())/len(cntx_full.get_extent([str(x) for x in c.get_intent()]))\
+                if len(c.get_extent())>0 else 0
+
+    def filter_concepts(self, fltr):
+        for c in self._concepts:
+            if not fltr(c):
+                self.delete_concept(c.get_id())
