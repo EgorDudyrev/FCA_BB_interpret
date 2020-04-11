@@ -346,71 +346,69 @@ class Context:
 
         self._impls = impls
 
-    @staticmethod
-    def binarize_ds(ds, cat_feats, thresholds, cases):
-        bin_ds = pd.DataFrame()
-        for f in cat_feats:
-            if ds[f].nunique() == 2:
-                if ds[f].dtype == bool:
-                    bin_ds[f"{f}__is__True"] = ds[f]
-                elif all(ds[f].unique() == [0, 1]):
-                    bin_ds[f"{f}__is__True"] = ds[f].astype(bool)
-                bin_ds[f"{f}__not__True"] = ~ds[f]
+
+class Binarizer:
+        def binarize_ds(self, ds, cat_feats, thresholds, cases):
+            bin_ds = pd.DataFrame()
+            for f in cat_feats:
+                if ds[f].nunique() == 2:
+                    if ds[f].dtype == bool:
+                        bin_ds[f"{f}__is__True"] = ds[f]
+                    elif all(ds[f].unique() == [0, 1]):
+                        bin_ds[f"{f}__is__True"] = ds[f].astype(bool)
+                    bin_ds[f"{f}__not__True"] = ~ds[f]
+                else:
+                    for v in ds[f].unique():
+                        bin_ds[f"{f}__is__{v}"] = ds[f] == v
+                        bin_ds[f"{f}__not__{v}"] = ~bin_ds[f"{f}__is__{v}"]
+
+            feat_orders = []
+            for f, ts in thresholds.items():
+                fo_geq = []
+                fo_le = []
+                for t in sorted(ts):
+                    bin_ds[f"{f}__geq__{t}"] = ds[f] >= t
+                    bin_ds[f"{f}__lt__{t}"] = ds[f] < t
+                    fo_geq = [f"{f}__geq__{t}"] + fo_geq
+                    fo_le = fo_le + [f"{f}__lt__{t}"]
+                feat_orders += [tuple(fo_geq), tuple(fo_le)]
+
+            for f, cs in cases.items():
+                for c in cs:
+                    bin_ds[f"{f}__is__{c}"] = ds[f] == c
+                    bin_ds[f"{f}__not__{c}"] = ~bin_ds[f"{f}__is__{c}"]
+
+            bin_ds = bin_ds.astype(bool)
+            return bin_ds, feat_orders
+
+        def test_feats(self, bin_ds, fs, y, metric, n_estimators=100):
+            from sklearn.ensemble import RandomForestClassifier, RandomForestRegressor
+            if set(y) == {0, 1}:
+                rf = RandomForestClassifier(n_estimators=n_estimators)
             else:
-                for v in ds[f].unique():
-                    bin_ds[f"{f}__is__{v}"] = ds[f] == v
-                    bin_ds[f"{f}__not__{v}"] = ~bin_ds[f"{f}__is__{v}"]
+                rf = RandomForestRegressor(n_estimators=n_estimators)
 
-        feat_orders = []
-        for f, ts in thresholds.items():
-            fo_geq = []
-            fo_le = []
-            for t in sorted(ts):
-                bin_ds[f"{f}__geq__{t}"] = ds[f] >= t
-                bin_ds[f"{f}__lt__{t}"] = ds[f] < t
-                fo_geq = [f"{f}__geq__{t}"] + fo_geq
-                fo_le = fo_le + [f"{f}__lt__{t}"]
-            feat_orders += [tuple(fo_geq), tuple(fo_le)]
+            rf.fit(bin_ds[fs], y)
+            m = metric(y, rf.predict(bin_ds[fs]))
+            s = pd.Series(rf.feature_importances_, index=fs).sort_values(ascending=False)
+            return m, s
 
-        for f, cs in cases.items():
-            for c in cs:
-                bin_ds[f"{f}__is__{c}"] = ds[f] == c
-                bin_ds[f"{f}__not__{c}"] = ~bin_ds[f"{f}__is__{c}"]
+        def squeeze_bin_dataset(self, bin_ds, y, metric, metric_lim, use_tqdm=False, n_estimators=100):
+            fs = bin_ds.columns
+            max_metric = self.test_feats(bin_ds, fs, y, metric, n_estimators)[0]
+            assert max_metric >= metric_lim, f'Target metric limit is unreachable (max is {max_metric})'
 
-        bin_ds = bin_ds.astype(bool)
-        return bin_ds, feat_orders
+            for i in tqdm(range(len(bin_ds.columns)), disable=not use_tqdm):
+                for f in fs[::-1]:
+                    fs_ = [f_ for f_ in fs if f_ != f]
+                    ac, s = cls.test_feats(bin_ds, fs_, y, metric, n_estimators)
 
-    @staticmethod
-    def test_feats(bin_ds, fs, y, metric, n_estimators=100):
-        from sklearn.ensemble import RandomForestClassifier, RandomForestRegressor
-        if set(y) == {0, 1}:
-            rf = RandomForestClassifier(n_estimators=n_estimators)
-        else:
-            rf = RandomForestRegressor(n_estimators=n_estimators)
-
-        rf.fit(bin_ds[fs], y)
-        m = metric(y, rf.predict(bin_ds[fs]))
-        s = pd.Series(rf.feature_importances_, index=fs).sort_values(ascending=False)
-        return m, s
-
-    @classmethod
-    def squeeze_bin_dataset(cls, bin_ds, y, metric, metric_lim, use_tqdm=False, n_estimators=100):
-        fs = bin_ds.columns
-        max_metric = cls.test_feats(bin_ds, fs, y, metric, n_estimators)[0]
-        assert max_metric >= metric_lim, f'Target metric limit is unreachable (max is {max_metric})'
-
-        for i in tqdm(range(len(bin_ds.columns)), disable=not use_tqdm):
-            for f in fs[::-1]:
-                fs_ = [f_ for f_ in fs if f_ != f]
-                ac, s = cls.test_feats(bin_ds, fs_, y, metric, n_estimators)
-
-                if ac >= metric_lim:
-                    fs = list(s.index)
+                    if ac >= metric_lim:
+                        fs = list(s.index)
+                        break
+                else:
                     break
-            else:
-                break
-        return fs
-
+            return fs
 
 class FormalManager:
     def __init__(self, context, ds_obj=None, target_attr=None, cat_feats=None, task_type=None):
