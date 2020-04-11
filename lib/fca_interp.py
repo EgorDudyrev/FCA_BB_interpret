@@ -130,9 +130,11 @@ class Concept:
             return all([g in c._extent_short for g in self._extent_short]) \
                    and all([m in self._intent_short for m in c._intent_short])
 
+class AbstractContext:
+    def __init__(self, data, objs=None, attrs=None, y_true=None, y_pred=None):
+        pass
 
-class Context:
-    def __init__(self, data, objs=None, attrs=None, y_true=None, y_pred=None, ):  # cat_attrs=None):
+    def _check_input_data(self, data, objs, attrs, y_true, y_pred):
         if type(data) == list:
             data = np.array(data)
 
@@ -148,8 +150,6 @@ class Context:
 
         objs = np.array([str(g) for g in objs])
         attrs = np.array([str(m) for m in attrs])
-
-        assert data.dtype == bool, 'Only Boolean contexts are supported for now'
 
         if y_true is not None:
             if type(y_true) == pd.Series:
@@ -170,9 +170,69 @@ class Context:
                 self._y_pred = y_pred
             else:
                 raise TypeError(f"DataType {type(y_pred)} is not understood. np.ndarray or pandas.Series is required")
-            assert len(y_pred) == len(data), f'Data and Y_vals have different num of objects ( Data: {len(data)}, y_vals: {len(y_pred)})'
+            assert len(y_pred) == len(
+                data), f'Data and Y_vals have different num of objects ( Data: {len(data)}, y_vals: {len(y_pred)})'
         else:
             self._y_pred = None
+
+        return data, objs, attrs, y_true, y_pred
+
+    def get_attrs(self, is_full=True):
+        return self._attrs_full if is_full else self._attrs
+
+
+    def get_objs(self, is_full=True):
+        return self._objs_full if is_full else self._objs
+
+    def get_data(self):
+        return self._data_full
+
+    def get_y_true(self, objs):
+        if objs is None or len(objs) == 0 or self._y_true is None:
+            return None
+        return self._y_true[np.isin(self._objs_full, objs)]
+
+    def get_y_pred(self, objs):
+        if objs is None or len(objs) == 0 or self._y_pred is None:
+            return None
+        return self._y_pred[np.isin(self._objs_full, objs)]
+
+    def _get_id_in_array(self, x, ar, ar_name):
+        if type(x) == int:
+            idx = x
+            if idx < 0 or idx > len(ar)-1:
+                raise ValueError(f"There are only {len(ar)} {ar_name} (Suggested ({idx}")
+        elif type(x) == str:
+            if x not in ar:
+                raise ValueError(f"No such {x} in {ar_name}")
+            idx = np.argmax(ar == x)
+        else:
+            raise TypeError(f"Possible values for {ar_name} are string and int type")
+        return idx
+
+    def _get_ids_in_array(self, xs, ar, ar_name):
+        idxs = []
+        error = []
+        xs = list(xs) if type(xs) == tuple else [xs] if type(xs) != list else xs
+        for x in xs:
+            try:
+                idxs.append(self._get_id_in_array(x, ar, ar_name))
+            except ValueError:
+                error.append(x)
+        if len(error) > 0:
+            raise ValueError(f"Wrong {ar_name} are given: {error}")
+        return idxs
+
+    def get_table(self, is_full=True):
+        return pd.DataFrame(self._data, index=self._objs_full if is_full else self._objs,
+                            columns=self._attrs_full if is_full else self._attrs)
+
+
+
+class BinaryContext(AbstractContext):
+    def __init__(self, data, objs=None, attrs=None, y_true=None, y_pred=None, ):  # cat_attrs=None):
+        super().__init__(data, objs, attrs, y_true, y_pred)
+        data, objs, attrs, y_true, y_pred = super()._check_input_data(data, objs, attrs, y_true, y_pred)
 
         self._data_full = data
         self._objs_full = objs
@@ -214,15 +274,6 @@ class Context:
 
         return same_objs, same_attrs
 
-    def get_attrs(self, is_full=True):
-        return self._attrs_full if is_full else self._attrs
-
-    def get_objs(self, is_full=True):
-        return self._objs_full if is_full else self._objs
-
-    def get_data(self):
-        return self._data_full
-
     def get_same_objs(self, g):
         if g in self._same_objs.keys():
             return self._same_objs[g]
@@ -236,50 +287,6 @@ class Context:
         for k, v in self._same_attrs.items():
             if m in v:
                 return [k]+[x for x in v if x != m]
-
-    def get_y_true(self, objs):
-        if objs is None or len(objs) == 0 or self._y_true is None:
-            return None
-        return self._y_true[np.isin(self._objs_full, objs)]
-
-    def get_y_pred(self, objs):
-        if objs is None or len(objs) == 0 or self._y_pred is None:
-            return None
-        return self._y_pred[np.isin(self._objs_full, objs)]
-
-    def _get_id_in_array(self, x, ar, ar_name):
-        if type(x) == int:
-            idx = x
-            if idx < 0 or idx > len(ar)-1:
-                raise ValueError(f"There are only {len(ar)} {ar_name} (Suggested ({idx}")
-        elif type(x) == str:
-            if x not in ar:
-                raise ValueError(f"No such {x} in {ar_name}")
-            idx = np.argmax(ar == x)
-        else:
-            raise TypeError(f"Possible values for {ar_name} are string and int type")
-        return idx
-
-    def _get_ids_in_array(self, xs, ar, ar_name):
-        idxs = []
-        error = []
-        xs = list(xs) if type(xs) == tuple else [xs] if type(xs) != list else xs
-        for x in xs:
-            try:
-                idxs.append(self._get_id_in_array(x, ar, ar_name))
-            except ValueError:
-                error.append(x)
-        if len(error) > 0:
-            raise ValueError(f"Wrong {ar_name} are given: {error}")
-        return idxs
-
-    def get_attr_values(self, m, trust_mode=False):
-        m_idx = self._get_id_in_array(m, self._attrs, 'attributes') if not trust_mode else m
-        return self._data[:, m_idx]
-
-    def get_obj_values(self, g, trust_mode=False):
-        g_idx = self._get_id_in_array(g, self._objs, 'objects') if not trust_mode else g
-        return self._data[g_idx]
 
     def get_extent(self, ms, trust_mode=False, verb=True):
         ms_idxs = self._get_ids_in_array(ms, self._attrs, 'attributes') if not trust_mode else ms
@@ -297,10 +304,6 @@ class Context:
         int_ = list(int_[cntx.sum(0) == len(gs_idxs)])
         int_ = [self._attrs[m] for m in int_] if verb else int_
         return int_
-
-    def get_table(self, is_full=True):
-        return pd.DataFrame(self._data, index=self._objs_full if is_full else self._objs,
-                            columns=self._attrs_full if is_full else self._attrs)
 
     def __repr__(self):
         s = f"Num of objects: {len(self._objs)}, Num of attrs: {len(self._attrs)}\n"
@@ -393,15 +396,19 @@ class Binarizer:
             s = pd.Series(rf.feature_importances_, index=fs).sort_values(ascending=False)
             return m, s
 
-        def squeeze_bin_dataset(self, bin_ds, y, metric, metric_lim, use_tqdm=False, n_estimators=100):
+        def squeeze_bin_dataset(self, bin_ds, y, metric, metric_lim, use_tqdm=False, n_estimators=100,
+                                min_n_feats=None):
             fs = bin_ds.columns
             max_metric = self.test_feats(bin_ds, fs, y, metric, n_estimators)[0]
             assert max_metric >= metric_lim, f'Target metric limit is unreachable (max is {max_metric})'
 
             for i in tqdm(range(len(bin_ds.columns)), disable=not use_tqdm):
+                if min_n_feats is not None and len(fs) <= min_n_feats:
+                    break
+
                 for f in fs[::-1]:
                     fs_ = [f_ for f_ in fs if f_ != f]
-                    ac, s = cls.test_feats(bin_ds, fs_, y, metric, n_estimators)
+                    ac, s = self.test_feats(bin_ds, fs_, y, metric, n_estimators)
 
                     if ac >= metric_lim:
                         fs = list(s.index)
@@ -409,6 +416,66 @@ class Binarizer:
                 else:
                     break
             return fs
+
+
+class MultiValuedContext(AbstractContext):
+    def __init__(self, data, objs=None, attrs=None, y_true=None, y_pred=None,  cat_attrs=None):
+        super().__init__(data, objs, attrs, y_true, y_pred)
+        data, objs, attrs, y_true, y_pred = super()._check_input_data(data, objs, attrs, y_true, y_pred)
+
+        self._data_full = data
+        self._objs_full = objs
+        self._attrs_full = attrs
+
+        self._attrs = attrs
+        self._objs = objs
+        self._data = data
+
+    def _reduce_context(self, data, objs, attrs):
+        raise NotImplementedError
+
+    def get_same_objs(self, g):
+        raise NotImplementedError
+
+    def get_same_attrs(self, m):
+        raise NotImplementedError
+
+    def get_extent(self, ms, trust_mode=False, verb=True):
+        ms_idxs = self._get_ids_in_array(ms, self._attrs, 'attributes') if not trust_mode else ms
+
+        ext = np.arange(len(self._objs))
+        ext = list(ext[self._data[:, ms_idxs].sum(1) == len(ms_idxs)])
+        ext = [self._objs[g] for g in ext] if verb else ext
+        return ext
+
+    def get_intent(self, gs, trust_mode=False, verb=True):
+        gs_idxs = self._get_ids_in_array(gs, self._objs, 'objects') if not trust_mode else gs
+
+        int_ = np.arange(len(self._attrs))
+        cntx = self._data[gs_idxs]
+        int_ = list(int_[cntx.sum(0) == len(gs_idxs)])
+        int_ = [self._attrs[m] for m in int_] if verb else int_
+        return int_
+
+    def __repr__(self):
+        s = f"Num of objects: {len(self._objs)}, Num of attrs: {len(self._attrs)}\n"
+        s += repr_set(self._objs, 'Objects', True, lim=5)
+        s += repr_set(self._attrs, 'Attrs', True, lim=5)
+        #s += self.get_table().head().__repr__()
+        return s
+
+    def calc_implications(self, max_len=None, use_tqdm=False):
+        raise NotImplementedError
+
+    def repr_implications(self, impls=None, max_len=None, use_tqdm=False):
+        raise NotImplementedError
+
+    def save_implications(self, impls=None, max_len=None, use_tqdm=False):
+        if impls is None:
+            impls = self.calc_implications(max_len, use_tqdm)
+
+        self._impls = impls
+
 
 class FormalManager:
     def __init__(self, context, ds_obj=None, target_attr=None, cat_feats=None, task_type=None):
