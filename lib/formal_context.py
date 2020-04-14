@@ -4,120 +4,15 @@ from tqdm import tqdm
 
 from itertools import combinations, chain
 
-from abstract_context import AbstractContext
+from abstract_context import AbstractConcept, AbstractContext
+from utils import get_not_none, powerset, repr_set
 
 
-def get_not_none(v, v_if_none):
-    return v if v is not None else v_if_none
-
-
-def repr_set(set_, set_name, to_new_line=True, lim=None):
-    if set_ is None:
-        return ''
-    lim = get_not_none(lim, len(set_))
-    rpr = f"{set_name} (len: {len(set_)}): "
-    rpr += f"{(', '.join(f'{v}' for v in list(set_)[:lim])+(',...' if len(set_)>lim else '')) if len(set_) > 0 else '∅'}"
-    rpr += '\n' if to_new_line else ''
-    return rpr
-
-
-def powerset(iterable, max_len=None):
-    "powerset([1,2,3]) --> () (1,) (2,) (3,) (1,2) (1,3) (2,3) (1,2,3)"
-    s = list(iterable)
-    max_len = get_not_none(max_len, len(s))
-    return chain.from_iterable(combinations(s, r) for r in range(max_len + 1))
-
-
-class Concept:
-    def __init__(self, extent, intent, idx=None, pattern=None, title=None,
-                 y_true_mean=None, y_pred_mean=None, metrics=None, extent_short=None, intent_short=None,
-                 is_monotonic=False):
-        self._extent = np.array(extent)
-        self._intent = np.array(intent)
-        self._extent_short = get_not_none(extent_short, self._extent)
-        self._intent_short = get_not_none(intent_short, self._intent)
-        self._idx = idx
-        self._title = title
-        self._low_neighbs = None
-        self._up_neighbs = None
-        self._level = None
-        self._new_objs = None
-        self._new_attrs = None
-        self._metrics = get_not_none(metrics, {})
-        self._is_monotonic = is_monotonic
-
-    def get_extent(self):
-        return self._extent
-
-    def get_intent(self):
-        return self._intent
-
-    def get_id(self):
-        return self._idx
-
-    def get_level(self):
-        return self._level
-
-    def get_lower_neighbs(self):
-        return self._low_neighbs
-
-    def get_upper_neighbs(self):
-        return self._up_neighbs
-
-    def _repr_concept_header(self, print_level=True):
-        s = f"Concept"
-        s += f" {self._idx}" if self._idx is not None else ''
-        s += f" {self._title}" if self._title is not None else ''
-        s += f"\n"
-        s += f"level: {self._level}" if print_level and self._level is not None else ''
-        s += '\n'
-        return s
-
-    def __repr__(self):
-        s = self._repr_concept_header()
-
-        for set_, set_name in [(self._extent, 'extent'),
-                               (self._intent, 'intent'),
-                               (self._new_objs, 'new extent'),
-                               (self._new_attrs, 'new_intent'),
-                               (self._low_neighbs, 'lower neighbours'),
-                               (self._up_neighbs, 'upper neighbours'), ]:
-            s += repr_set(set_, set_name)
-
-        for k, v in self._metrics.items():
-            s += f'metric {k} = {v}\n'
-
-        return s
-
-    def pretty_repr(self, print_low_neighbs=False, print_up_neighbs=False, print_level=False, metrics_to_print=None,
-                    set_limit=5):
-        metrics_to_print = metrics_to_print if metrics_to_print!='all' else self._metrics.keys()
-
-        s = self._repr_concept_header(print_level)
-
-        for t in [(self._extent, 'extent', True),
-                  (self._intent, 'intent', True),
-                  (self._new_objs, 'new extent', True),
-                  (self._new_attrs, 'new_intent', True),
-                  (self._low_neighbs, 'lower neighbours', print_low_neighbs),
-                  (self._up_neighbs, 'upper neighbours', print_up_neighbs), ]:
-            set_, set_name, flg = t
-            if not flg:
-                continue
-            set_ = {x.replace('__is__', '=').replace('__not__', '!=').replace('__lt__', '<').replace('__geq__', '>=')
-                    for x in set_}
-            s += repr_set(set_, set_name, lim=set_limit)
-
-        for k in metrics_to_print:
-            s += f"metric {k} = {self._metrics.get(k, 'Undefined')}\n"
-
-        return s
-
-    def __str__(self):
-        s = self._repr_concept_header()
-        s += f"({len(self._extent)} objs, {len(self._intent)} attrs)"
-        s = s.replace('\n', ' ')
-        return s
+class Concept(AbstractConcept):
+    def __init__(self, extent, intent, idx=None, title=None,
+                 metrics=None, extent_short=None, intent_short=None, is_monotonic=False
+                 ):
+        super().__init__(extent, intent, idx, title, metrics, extent_short, intent_short, is_monotonic)
 
     def is_subconcept_of(self, c):
         """if a is subconcept of b, a<=b"""
