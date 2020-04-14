@@ -1,9 +1,77 @@
 import numpy as np
+from collections import Iterable
 
 from itertools import combinations, chain
 
-from abstract_context import AbstractContext
+from abstract_context import AbstractConcept, AbstractContext
 from utils import get_not_none, repr_set
+
+
+class PatternStructure(AbstractConcept):
+    def __init__(self, extent, intent, idx=None, title=None,
+                 metrics=None, extent_short=None, intent_short=None,
+                 is_monotonic=False, cat_feats=None,
+                 ):
+        assert type(intent) == dict, 'Pattern Structure intent should be of type dict'
+        super().__init__(extent, intent, idx, title, metrics, extent_short, intent_short, is_monotonic)
+        self._cat_feats = cat_feats
+
+    def _get_intent_as_array(self):
+        return [(f"{k} in ["+', '.join([str(v_) if type(v_) != str else f'"{v_}"' for v_ in v]) +"]") \
+                    if isinstance(v, Iterable) and type(v) != str else\
+                    f"{k} = {v}" for k, v in self._intent.items()]
+
+    def is_subconcept_of(self, c, trust_mode=False):
+        """if a is subconcept of b, a<=b"""
+        assert self._is_monotonic == c._is_monotonic, 'Cannot compare monotonic and antimonotonic concepts'
+        assert type(c) == PatternStructure, "Pattern Structures can be compared only with Pattern Structures"
+
+        if self._intent_short == c._intent_short and self._extent_short == c._extent_short:
+            return False
+
+        if self._is_monotonic:
+            if trust_mode:
+                if not all([g in self._extent_short for g in c._extent_short]):
+                    return False
+                return True
+            else:
+                raise NotImplementedError
+        else:
+            if not all([g in c._extent_short for g in self._extent_short]):
+                return False
+
+            if trust_mode:
+                return True  # because extent is already smaller
+
+            for k1, v1 in c._intent_short.items():
+                if v1 is None:
+                    continue
+
+                if k1 not in self._intent_short:
+                    return False
+
+                if v1 in self._cat_feats:
+                    if not all([v in c._intent_short[k1] for v_ in v1]):
+                        return False
+                else:
+                    v = self._intent_short[k1]
+                    if isinstance(v1, Iterable) and type(v1) != str:
+                        if isinstance(v, Iterable) and type(v) != str:
+                            # v, v1 - iterables
+                            if not( v1[0] <= v[0] and v[1] <= v1[1] ):
+                                return False
+                        else:
+                            # v1 - iterable, v not iterable
+                            if not (v1[0]<=v and v <= v[1]):
+                                return False
+                    else:
+                        # v1 is not iterable
+                        if isinstance(v, Iterable) and type(v) != str:
+                            return False
+
+                        if v != v1:
+                            return False
+                    return True
 
 
 class MultiValuedContext(AbstractContext):
@@ -51,7 +119,7 @@ class MultiValuedContext(AbstractContext):
                 assert len(v), 'Values of Real Valued attribute should be either int, float or tuple of len 2'
                 ext = ext[ (self._data[ext, m_id] >= v[0]) & (self._data[ext, m_id] <= v[1]) ]
 
-        ext = [self._objs[g] for g in ext] if verb else ext
+        ext = [str(self._objs[g]) for g in ext] if verb else ext
         return ext
 
     def get_intent(self, gs, trust_mode=False, verb=True, return_none = False):
@@ -77,7 +145,7 @@ class MultiValuedContext(AbstractContext):
                         v = v[0]
             pattern[k] = v
 
-        pattern = {k:v for k, v in pattern.items() if v is not None} if not return_none else pattern
+        pattern = {k: v for k, v in pattern.items() if v is not None} if not return_none else pattern
         return pattern
 
     def __repr__(self):

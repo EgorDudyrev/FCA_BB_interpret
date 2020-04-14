@@ -12,6 +12,7 @@ class Concept(AbstractConcept):
     def __init__(self, extent, intent, idx=None, title=None,
                  metrics=None, extent_short=None, intent_short=None, is_monotonic=False
                  ):
+        assert type(intent) in [list, tuple, np.ndarray], 'Formal Concept intent should be of type list, tuple of np.array'
         super().__init__(extent, intent, idx, title, metrics, extent_short, intent_short, is_monotonic)
 
     def is_subconcept_of(self, c):
@@ -88,7 +89,7 @@ class BinaryContext(AbstractContext):
 
         ext = np.arange(len(self._objs))
         ext = list(ext[self._data[:, ms_idxs].sum(1) == len(ms_idxs)])
-        ext = [self._objs[g] for g in ext] if verb else ext
+        ext = [str(self._objs[g]) for g in ext] if verb else ext
         return ext
 
     def get_intent(self, gs, trust_mode=False, verb=True):

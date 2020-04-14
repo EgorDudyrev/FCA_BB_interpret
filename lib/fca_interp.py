@@ -9,7 +9,7 @@ import plotly.graph_objects as go
 
 
 from formal_context import Concept, BinaryContext, Binarizer
-from pattern_structure import MultiValuedContext
+from pattern_structure import PatternStructure, MultiValuedContext
 from utils import get_not_none
 
 class FormalManager:

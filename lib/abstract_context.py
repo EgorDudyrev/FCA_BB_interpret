@@ -7,8 +7,8 @@ class AbstractConcept:
     def __init__(self, extent, intent, idx=None, title=None,
                  metrics=None, extent_short=None, intent_short=None,
                  is_monotonic=False):
-        self._extent = np.array(extent)
-        self._intent = np.array(intent)
+        self._extent = extent
+        self._intent = intent
         self._extent_short = get_not_none(extent_short, self._extent)
         self._intent_short = get_not_none(intent_short, self._intent)
         self._idx = idx
@@ -40,7 +40,7 @@ class AbstractConcept:
         return self._up_neighbs
 
     def _repr_concept_header(self, print_level=True):
-        s = f"Concept"
+        s = self.__class__.__name__
         s += f" {self._idx}" if self._idx is not None else ''
         s += f" {self._title}" if self._title is not None else ''
         s += f"\n"
@@ -48,11 +48,14 @@ class AbstractConcept:
         s += '\n'
         return s
 
+    def _get_intent_as_array(self):
+        return self._intent
+
     def __repr__(self):
         s = self._repr_concept_header()
 
         for set_, set_name in [(self._extent, 'extent'),
-                               (self._intent, 'intent'),
+                               (self._get_intent_as_array(), 'intent'),
                                (self._new_objs, 'new extent'),
                                (self._new_attrs, 'new_intent'),
                                (self._low_neighbs, 'lower neighbours'),
@@ -71,7 +74,7 @@ class AbstractConcept:
         s = self._repr_concept_header(print_level)
 
         for t in [(self._extent, 'extent', True),
-                  (self._intent, 'intent', True),
+                  (self._get_intent_as_array(), 'intent', True),
                   (self._new_objs, 'new extent', True),
                   (self._new_attrs, 'new_intent', True),
                   (self._low_neighbs, 'lower neighbours', print_low_neighbs),

@@ -8,7 +8,10 @@ def get_not_none(v, v_if_none):
 def repr_set(set_, set_name, to_new_line=True, lim=None):
     if set_ is None:
         return ''
-    lim = get_not_none(lim, len(set_))
+    try:
+        lim = get_not_none(lim, len(set_))
+    except Exception as e:
+        raise Exception(f'Error while repr_set {set_name}: {e}')
     rpr = f"{set_name} (len: {len(set_)}): "
     rpr += f"{(', '.join(f'{v}' for v in list(set_)[:lim])+(',...' if len(set_)>lim else '')) if len(set_) > 0 else '∅'}"
     rpr += '\n' if to_new_line else ''
