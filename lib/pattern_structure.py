@@ -16,18 +16,22 @@ class PatternStructure(AbstractConcept):
         super().__init__(extent, intent, idx, title, metrics, extent_short, intent_short, is_monotonic)
         self._cat_feats = cat_feats
 
-    def _get_intent_as_array(self):
+    @staticmethod
+    def _get_intent_as_array(int_):
         return [(f"{k} in ["+', '.join([str(v_) if type(v_) != str else f'"{v_}"' for v_ in v]) +"]") \
                     if isinstance(v, Iterable) and type(v) != str else\
-                    f"{k} = {v}" for k, v in self._intent.items()]
+                    f"{k} = {v}" for k, v in int_.items()]
 
     def is_subconcept_of(self, c, trust_mode=False):
         """if a is subconcept of b, a<=b"""
         assert self._is_monotonic == c._is_monotonic, 'Cannot compare monotonic and antimonotonic concepts'
         assert type(c) == PatternStructure, "Pattern Structures can be compared only with Pattern Structures"
 
-        if self._intent_short == c._intent_short and self._extent_short == c._extent_short:
-            return False
+        try:
+            if self._intent_short == c._intent_short and self._extent_short == c._extent_short:
+                return False
+        except Exception as e:
+            raise Exception(f'Cannot compare PatStructs: {self}, {c}\n{e}')
 
         if self._is_monotonic:
             if trust_mode:
@@ -101,12 +105,18 @@ class MultiValuedContext(AbstractContext):
 
     def get_extent(self, pattern, trust_mode=False, verb=True):
         assert type(pattern) == dict, "Pattern should be of type dict: attr_name->(values_interval)"
-        ms_names = [str(x) for x in pattern.keys()]
+        pattern = {str(k):v for k,v in pattern.items()}
+        #ms_names = [str(x) for x in pattern.keys()]
+        ms_names = [x for x in pattern.keys()]
         ms_idxs = self._get_ids_in_array(ms_names, self._attrs, 'attributes') if not trust_mode else ms_names
+        ms_idxs = [int(x) for x in ms_idxs]
 
         ext = np.arange(len(self._objs))
         for idx, m_id in enumerate(ms_idxs):
             v = pattern[ ms_names[idx]]
+            if isinstance(v, Iterable) and type(v)!=str:
+                if len(v)==0:
+                    v = None
             if v is None:
                 continue
             if m_id in self._cat_attrs_idxs:
@@ -114,9 +124,11 @@ class MultiValuedContext(AbstractContext):
                 v = [v] if type(v) == str else v
                 ext = ext[np.isin(self._data[ext, m_id], v)]
             else:
+                print('m_id:', type(m_id), 'v', v)
+                print(self._cat_attrs_idxs)
                 v = [v, v] if type(v) in [float, int] else v
                 v = sorted(v)
-                assert len(v), 'Values of Real Valued attribute should be either int, float or tuple of len 2'
+                assert type(v) in [int, float] or len(v) == 2, f'Values of Real Valued attribute should be either int, float or tuple of len 2 (got {v} of type({type(v)}) feature {m_id}'
                 ext = ext[ (self._data[ext, m_id] >= v[0]) & (self._data[ext, m_id] <= v[1]) ]
 
         ext = [str(self._objs[g]) for g in ext] if verb else ext
@@ -124,6 +136,9 @@ class MultiValuedContext(AbstractContext):
 
     def get_intent(self, gs, trust_mode=False, verb=True, return_none = False):
         gs_idxs = self._get_ids_in_array(gs, self._objs, 'objects') if not trust_mode else gs
+        if len(gs) == 0:
+            pattern = {k: None for k in self._attrs}
+            return pattern
 
         pattern = {}
         for m_id, m in enumerate(self._attrs):
@@ -136,9 +151,9 @@ class MultiValuedContext(AbstractContext):
                     v = v[0]
             else:
                 v = self._data[gs_idxs, m_id]
-                v = None if any([v_ is None or np.isnan(v_) for v_ in v]) else v
+                v = None if any([v_ is None or np.isnan(v_) for v_ in v]) or len(v)==0 else v
                 if v is not None:
-                    v = (v.min(), v.max())
+                    v = (min(v), max(v)) if isinstance(v, Iterable) and type(v)!=str else (v, v)
                     if v[0] == self._data[:, m_id].min() and v[1] == self._data[:, m_id].max():
                         v = None
                     elif v[0] == v[1]:

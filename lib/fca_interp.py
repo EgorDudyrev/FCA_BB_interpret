@@ -6,11 +6,10 @@ import concepts as concepts_mit
 import networkx as nx
 import plotly.graph_objects as go
 
-
-
 from formal_context import Concept, BinaryContext, Binarizer
 from pattern_structure import PatternStructure, MultiValuedContext
 from utils import get_not_none
+
 
 class FormalManager:
     def __init__(self, context, ds_obj=None, target_attr=None, cat_feats=None, task_type=None):
@@ -37,11 +36,24 @@ class FormalManager:
         return cpt[0]
 
     def sort_concepts(self, concepts):
-        return sorted(concepts, key=lambda c: (len(c.get_intent()), ','.join(c.get_intent())))
+        #return sorted(concepts, key=lambda c: (len(c.get_intent()), ','.join(c.get_intent())))
+        return sorted(concepts,
+                      key=lambda c: (len(c._get_intent_as_array(c.get_intent())),
+                                     ','.join(c._get_intent_as_array(c.get_intent())))
+                      )
 
     def construct_concepts(self, algo='mit', max_iters_num=None, max_num_attrs=None, min_num_objs=None, use_tqdm=True,
                            is_monotonic=False):
-        if algo == 'CBO':
+        if isinstance(self._context, MultiValuedContext):
+            concepts = self._close_by_one_pattern_structure(max_iters_num, max_num_attrs, min_num_objs, use_tqdm,
+                                          is_monotonic=is_monotonic)
+            concepts = {c for c in concepts}
+            #concepts = {PatternStructure(tuple(self._context.get_objs(is_full=False)[c.get_extent()])
+            #                    if len(c.get_extent()) > 0 else tuple(),
+            #                    tuple(self._context.get_attrs()[c.get_intent()])
+            #                    if len(c.get_intent()) > 0 else tuple()
+            #                    ) for c in concepts}
+        elif algo == 'CBO':
             concepts = self._close_by_one(max_iters_num, max_num_attrs, min_num_objs, use_tqdm,
                                           is_monotonic=is_monotonic)
             concepts = {Concept(tuple(self._context.get_objs(is_full=False)[c.get_extent()])
@@ -62,15 +74,21 @@ class FormalManager:
         for idx, c in enumerate(self.sort_concepts(concepts)):
             ext_short = c.get_extent()
             int_short = c.get_intent()
-            ext_ = [g_ for g in ext_short for g_ in [g] + list(self._context.get_same_objs(g))]
-            int_ = [m_ for m in int_short for m_ in [m] + list(self._context.get_same_attrs(m))]
 
-            metrics = self._calc_metrics_inconcept(ext_) if len(ext_) > 0 else None
-
-            new_concepts.add(Concept(ext_, int_, idx=idx,
+            if not isinstance(self._context, MultiValuedContext):
+                int_ = [m_ for m in int_short for m_ in [m] + list(self._context.get_same_attrs(m))]
+                ext_ = [g_ for g in ext_short for g_ in [g] + list(self._context.get_same_objs(g))]
+                metrics = self._calc_metrics_inconcept(ext_) if len(ext_) > 0 else None
+                new_concepts.add(Concept(ext_, int_, idx=idx,
                                      metrics=metrics,
                                      extent_short=ext_short, intent_short=int_short,
                                      is_monotonic=is_monotonic))
+            else:
+                metrics = self._calc_metrics_inconcept(ext_short) if len(ext_short) > 0 else None
+                new_concepts.add(PatternStructure(ext_short, int_short, idx=idx,
+                                    metrics=metrics,
+                                    is_monotonic=is_monotonic,
+                                    cat_feats=self._cat_feats))
         concepts = new_concepts
         self._concepts = concepts
 
@@ -145,9 +163,11 @@ class FormalManager:
         ms['y_true_mean'] = np.mean(y_true)
         return ms
 
-    def _close_by_one(self, max_iters_num, max_num_attrs, min_num_objs, use_tqdm, is_monotonic=False):
+    def _close_by_one(self, max_iters_num, max_num_attrs, min_num_objs, use_tqdm, is_monotonic=False,
+                      iter_by_objects=False):
         cntx = self._context
         n_attrs = len(cntx.get_attrs())
+
         combs_to_check = [[]]
         concepts = set()
         if use_tqdm:
@@ -170,13 +190,13 @@ class FormalManager:
                 break
             comb = combs_to_check.pop(0)
 
-            if max_num_attrs is not None and len(comb) > max_num_attrs:
-                continue
             ext_ = cntx.get_extent(comb, trust_mode=True, verb=False)
-            if min_num_objs is not None and len(ext_) <= min_num_objs:
-                continue
             int_ = cntx.get_intent(ext_, trust_mode=True, verb=False)
 
+            if max_num_attrs is not None and len(comb) > max_num_attrs:
+                continue
+            if min_num_objs is not None and len(ext_) <= min_num_objs:
+                continue
             new_int_ = [x for x in int_ if x not in comb]
 
             if (len(comb) > 0 and any([x < comb[-1] for x in new_int_])) or tuple(int_) in saved_ints:
@@ -200,6 +220,9 @@ class FormalManager:
             concepts.add(Concept(ext_, int_))
 
         return concepts
+
+    def _close_by_one_pattern_structure(self, max_iters_num, max_num_attrs, min_num_objs, use_tqdm, is_monotonic=False):
+        raise NotImplementedError
 
     def _construct_lattice_connections(self, use_tqdm=True):
         n_concepts = len(self._concepts)

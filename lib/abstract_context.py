@@ -7,7 +7,8 @@ class AbstractConcept:
     def __init__(self, extent, intent, idx=None, title=None,
                  metrics=None, extent_short=None, intent_short=None,
                  is_monotonic=False):
-        self._extent = extent
+        #self._extent = extent
+        self._extent = list(extent)
         self._intent = intent
         self._extent_short = get_not_none(extent_short, self._extent)
         self._intent_short = get_not_none(intent_short, self._intent)
@@ -48,14 +49,15 @@ class AbstractConcept:
         s += '\n'
         return s
 
-    def _get_intent_as_array(self):
-        return self._intent
+    @staticmethod
+    def _get_intent_as_array(int_):
+        return int_
 
     def __repr__(self):
         s = self._repr_concept_header()
 
         for set_, set_name in [(self._extent, 'extent'),
-                               (self._get_intent_as_array(), 'intent'),
+                               (self._get_intent_as_array(self._intent), 'intent'),
                                (self._new_objs, 'new extent'),
                                (self._new_attrs, 'new_intent'),
                                (self._low_neighbs, 'lower neighbours'),
@@ -74,7 +76,7 @@ class AbstractConcept:
         s = self._repr_concept_header(print_level)
 
         for t in [(self._extent, 'extent', True),
-                  (self._get_intent_as_array(), 'intent', True),
+                  (self._get_intent_as_array(self._intent), 'intent', True),
                   (self._new_objs, 'new extent', True),
                   (self._new_attrs, 'new_intent', True),
                   (self._low_neighbs, 'lower neighbours', print_low_neighbs),
@@ -174,7 +176,8 @@ class AbstractContext:
             idx = x
             if idx < 0 or idx > len(ar)-1:
                 raise ValueError(f"There are only {len(ar)} {ar_name} (Suggested ({idx}")
-        elif type(x) == str:
+        elif type(x) in [str, np.str_]:
+            x = np.str_(x)
             if x not in ar:
                 raise ValueError(f"No such {x} in {ar_name}")
             idx = np.argmax(ar == x)
