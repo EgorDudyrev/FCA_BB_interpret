@@ -124,17 +124,17 @@ class MultiValuedContext(AbstractContext):
                 v = [v] if type(v) == str else v
                 ext = ext[np.isin(self._data[ext, m_id], v)]
             else:
-                print('m_id:', type(m_id), 'v', v)
-                print(self._cat_attrs_idxs)
+                #print('m_id:', type(m_id), 'v', v)
+                #print(self._cat_attrs_idxs)
                 v = [v, v] if type(v) in [float, int] else v
                 v = sorted(v)
                 assert type(v) in [int, float] or len(v) == 2, f'Values of Real Valued attribute should be either int, float or tuple of len 2 (got {v} of type({type(v)}) feature {m_id}'
                 ext = ext[ (self._data[ext, m_id] >= v[0]) & (self._data[ext, m_id] <= v[1]) ]
 
-        ext = [str(self._objs[g]) for g in ext] if verb else ext
+        ext = [str(self._objs[g]) for g in ext] if verb else list(ext)
         return ext
 
-    def get_intent(self, gs, trust_mode=False, verb=True, return_none = False):
+    def get_intent(self, gs, trust_mode=False, verb=True, return_none=False):
         gs_idxs = self._get_ids_in_array(gs, self._objs, 'objects') if not trust_mode else gs
         if len(gs) == 0:
             pattern = {k: None for k in self._attrs}

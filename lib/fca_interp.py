@@ -222,7 +222,37 @@ class FormalManager:
         return concepts
 
     def _close_by_one_pattern_structure(self, max_iters_num, max_num_attrs, min_num_objs, use_tqdm, is_monotonic=False):
-        raise NotImplementedError
+        cntx = self._context
+        n_objs = len(cntx.get_objs())
+
+        combs_to_check = [[g_idx] for g_idx in range(len(cntx._objs))]
+        concepts = set()
+        iter_ = 0
+        saved_exts = set()
+        # print(combs_to_check)
+        #t0 = datetime.now()
+        while len(combs_to_check) > 0:
+            iter_ += 1
+
+            comb = combs_to_check.pop(0)
+
+            int_ = cntx.get_intent(comb, trust_mode=True, verb=False)
+            ext_ = cntx.get_extent(int_, trust_mode=True, verb=False)
+            new_ext_ = [x for x in ext_ if x not in comb]
+
+            #t1 = datetime.now()
+            #dt = (t1 - t0).total_seconds()
+            #print(f"{iter_}: len(ext_)={len(ext_)}, first_in_comb: {ext_[0]}, new_ext_len:{len(new_ext_)}, time spend: {dt:.2f} sec, speed: {dt / iter_:.2f} sec/iter")
+
+            if (len(comb) > 0 and any([x < comb[-1] for x in new_ext_])) or tuple(ext_) in saved_exts:
+                continue
+
+            concepts.add(PatternStructure(ext_, int_, cat_feats=self._cat_feats))
+            saved_exts.add(tuple(ext_))
+
+            new_combs = [ext_ + [x] for x in range((comb[-1] if len(comb) > 0 else -1) + 1, n_objs) if x not in ext_]
+            combs_to_check = new_combs + combs_to_check
+        return concepts
 
     def _construct_lattice_connections(self, use_tqdm=True):
         n_concepts = len(self._concepts)
@@ -467,8 +497,12 @@ class FormalManager:
 
     def calc_strongness(self, cntx_full, use_tqdm=False):
         for c in tqdm(self.get_concepts(), disable=not use_tqdm):
-            c._metrics['strongness'] = len(c.get_extent())/len(cntx_full.get_extent([str(x) for x in c.get_intent()]))\
-                if len(c.get_extent())>0 else 0
+            if type(c) == Concept:
+                ext_ = cntx_full.get_extent([str(x) for x in c.get_intent()])
+            elif type(c) == PatternStructure:
+                ext_ = cntx_full.get_extent(c.get_intent(), trust_mode=True)
+            c._metrics['strongness'] = len(c.get_extent()) / len(ext_) \
+                if len(c.get_extent()) > 0 else 0
 
     def filter_concepts(self, fltr):
         for c in self._concepts:
