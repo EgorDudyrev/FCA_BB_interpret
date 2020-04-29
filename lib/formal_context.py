@@ -1,11 +1,11 @@
 import numpy as np
 import pandas as pd
-from tqdm import tqdm
+from tqdm.notebook import tqdm
 
 from itertools import combinations, chain
 
 from abstract_context import AbstractConcept, AbstractContext
-from utils import get_not_none, powerset, repr_set
+from utils_ import get_not_none, powerset, repr_set
 
 
 class Concept(AbstractConcept):
@@ -37,10 +37,10 @@ class BinaryContext(AbstractContext):
 
         self._same_objs = same_objs
         self._same_attrs = same_attrs
-        self._data = data[[idx for idx, g in enumerate(objs) if g in same_objs.keys()], :] \
-                         [:,[idx for idx, m in enumerate(attrs) if m in same_attrs.keys()]]
-        self._objs = np.array([g for idx, g in enumerate(objs) if g in same_objs.keys()])
-        self._attrs = np.array([m for idx, m in enumerate(attrs) if m in same_attrs.keys()])
+        self._data = data[[idx for idx, g in enumerate(objs) if idx in same_objs.keys()], :] \
+                         [:,[idx for idx, m in enumerate(attrs) if idx in same_attrs.keys()]]
+        self._objs = np.array([g for idx, g in enumerate(objs) if idx in same_objs.keys()])
+        self._attrs = np.array([m for idx, m in enumerate(attrs) if idx in same_attrs.keys()])
 
     def _reduce_context(self, data, objs, attrs):
         same_attrs = {}
@@ -65,12 +65,14 @@ class BinaryContext(AbstractContext):
             for idx in idxs:
                 saw_objs.add(idx)
 
-        same_attrs = {attrs[k]: np.array(attrs)[v] if len(v) > 0 else v for k, v in same_attrs.items()}
-        same_objs = {objs[k]: np.array(objs)[v] if len(v) > 0 else v for k, v in same_objs.items()}
+        #same_attrs = {attrs[k]: np.array(attrs)[v] if len(v) > 0 else v for k, v in same_attrs.items()}
+        #same_objs = {objs[k]: np.array(objs)[v] if len(v) > 0 else v for k, v in same_objs.items()}
 
         return same_objs, same_attrs
 
     def get_same_objs(self, g):
+        idx = self._get_id_in_array(g, self._objs, 'objects')
+        g = idx
         if g in self._same_objs.keys():
             return self._same_objs[g]
         for k, v in self._same_objs.items():
@@ -78,27 +80,53 @@ class BinaryContext(AbstractContext):
                 return [k]+[x for x in v if x != g]
 
     def get_same_attrs(self, m):
+        idx = self._get_id_in_array(m, self._attrs, 'attributes')
+        m = idx
         if m in self._same_attrs.keys():
             return self._same_attrs[m]
         for k, v in self._same_attrs.items():
             if m in v:
                 return [k]+[x for x in v if x != m]
 
-    def get_extent(self, ms, trust_mode=False, verb=True):
-        ms_idxs = self._get_ids_in_array(ms, self._attrs, 'attributes') if not trust_mode else ms
+    def get_extent(self, ms, trust_mode=False, verb=True, is_full=False):
+        assert trust_mode is True or all(
+            [type(m) in [str, np.str_] for m in ms]), 'If not trust_mode, attribute values should be string'
 
-        ext = np.arange(len(self._objs))
-        ext = list(ext[self._data[:, ms_idxs].sum(1) == len(ms_idxs)])
-        ext = [str(self._objs[g]) for g in ext] if verb else ext
+        ms = [m for m in ms if m in self._attrs] if not trust_mode else ms
+
+        if is_full:
+            ms_idxs = self._get_ids_in_array(ms, self._attrs_full, 'attributes') if not trust_mode else ms
+            data = self._data_full
+            objs = self._objs_full
+        else:
+            ms_idxs = self._get_ids_in_array(ms, self._attrs, 'attributes') if not trust_mode else ms
+            data = self._data
+            objs = self._objs
+
+        ext = np.arange(len(objs))
+        ext = list(ext[data[:, ms_idxs].sum(1) == len(ms_idxs)])
+        ext = [objs[g] for g in ext] if verb else ext
         return ext
 
-    def get_intent(self, gs, trust_mode=False, verb=True):
-        gs_idxs = self._get_ids_in_array(gs, self._objs, 'objects') if not trust_mode else gs
+    def get_intent(self, gs, trust_mode=False, verb=True, is_full=False):
+        assert trust_mode is True or all(
+            [type(g) in [str, np.str_] for g in gs]), 'If not trust_mode, object values should be string'
 
-        int_ = np.arange(len(self._attrs))
-        cntx = self._data[gs_idxs]
+        gs = [g for g in gs if g in self._objs] if not trust_mode else gs
+
+        if is_full:
+            gs_idxs = self._get_ids_in_array(gs, self._objs_full, 'objects') if not trust_mode else gs
+            data = self._data_full
+            attrs = self._attrs_full
+        else:
+            gs_idxs = self._get_ids_in_array(gs, self._objs, 'objects') if not trust_mode else gs
+            data = self._data
+            attrs = self._attrs
+
+        int_ = np.arange(len(attrs))
+        cntx = data[gs_idxs]
         int_ = list(int_[cntx.sum(0) == len(gs_idxs)])
-        int_ = [self._attrs[m] for m in int_] if verb else int_
+        int_ = [attrs[m] for m in int_] if verb else int_
         return int_
 
     def __repr__(self):
@@ -163,13 +191,13 @@ class Binarizer:
             feat_orders = []
             for f, ts in thresholds.items():
                 fo_geq = []
-                fo_le = []
+                fo_leq = []
                 for t in sorted(ts):
                     bin_ds[f"{f}__geq__{t}"] = ds[f] >= t
-                    bin_ds[f"{f}__lt__{t}"] = ds[f] < t
+                    bin_ds[f"{f}__leq__{t}"] = ds[f] <= t
                     fo_geq = [f"{f}__geq__{t}"] + fo_geq
-                    fo_le = fo_le + [f"{f}__lt__{t}"]
-                feat_orders += [tuple(fo_geq), tuple(fo_le)]
+                    fo_leq = fo_leq + [f"{f}__leq__{t}"]
+                feat_orders += [tuple(fo_geq), tuple(fo_leq)]
 
             for f, cs in cases.items():
                 for c in cs:

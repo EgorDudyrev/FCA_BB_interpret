@@ -4,7 +4,7 @@ from collections import Iterable
 from itertools import combinations, chain
 
 from abstract_context import AbstractConcept, AbstractContext
-from utils import get_not_none, repr_set
+from utils_ import get_not_none, repr_set
 
 
 class PatternStructure(AbstractConcept):
@@ -126,8 +126,7 @@ class MultiValuedContext(AbstractContext):
             else:
                 #print('m_id:', type(m_id), 'v', v)
                 #print(self._cat_attrs_idxs)
-                v = [v, v] if type(v) in [float, int] else v
-                v = sorted(v)
+                v = sorted([v, v]) if type(v) in [float, int] else v
                 assert type(v) in [int, float] or len(v) == 2, f'Values of Real Valued attribute should be either int, float or tuple of len 2 (got {v} of type({type(v)}) feature {m_id}'
                 ext = ext[ (self._data[ext, m_id] >= v[0]) & (self._data[ext, m_id] <= v[1]) ]
 

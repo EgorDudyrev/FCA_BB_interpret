@@ -1,18 +1,18 @@
 import numpy as np
 import pandas as pd
 import scipy as sp
-from tqdm import tqdm
+from tqdm.notebook import tqdm
 import concepts as concepts_mit
 import networkx as nx
 import plotly.graph_objects as go
 
 from formal_context import Concept, BinaryContext, Binarizer
 from pattern_structure import PatternStructure, MultiValuedContext
-from utils import get_not_none
+from utils_ import get_not_none
 
 
 class FormalManager:
-    def __init__(self, context, ds_obj=None, target_attr=None, cat_feats=None, task_type=None):
+    def __init__(self, context, ds_obj=None, target_attr=None, cat_feats=None, task_type=None, context_full=None):
         self._context = context
         if ds_obj is not None:
             ds_obj.index = ds_obj.index.astype(str)
@@ -22,6 +22,7 @@ class FormalManager:
         self._top_concept = None
         self._cat_feats = cat_feats
         self._task_type = task_type
+        self._context_full = context_full
 
     def get_context(self):
         return self._context
@@ -43,26 +44,36 @@ class FormalManager:
                       )
 
     def construct_concepts(self, algo='mit', max_iters_num=None, max_num_attrs=None, min_num_objs=None, use_tqdm=True,
-                           is_monotonic=False):
+                           is_monotonic=False, strongness_lower_bound=None, calc_metrics=True):
         if isinstance(self._context, MultiValuedContext):
             concepts = self._close_by_one_pattern_structure(max_iters_num, max_num_attrs, min_num_objs, use_tqdm,
                                           is_monotonic=is_monotonic)
             concepts = {c for c in concepts}
-            #concepts = {PatternStructure(tuple(self._context.get_objs(is_full=False)[c.get_extent()])
-            #                    if len(c.get_extent()) > 0 else tuple(),
-            #                    tuple(self._context.get_attrs()[c.get_intent()])
-            #                    if len(c.get_intent()) > 0 else tuple()
-            #                    ) for c in concepts}
+        elif strongness_lower_bound is not None:
+            concepts = self._close_by_one_strong_limit(max_iters_num, max_num_attrs, min_num_objs, use_tqdm,
+                                          is_monotonic=is_monotonic, strongness_lower_bound=strongness_lower_bound)
+            concepts = {Concept(tuple(self._context.get_objs(is_full=False)[c.get_extent()])
+                                if len(c.get_extent()) > 0 else tuple(),
+                                tuple(self._context.get_attrs()[c.get_intent()])
+                                if len(c.get_intent()) > 0 else tuple()
+                                ) for c in concepts}
+            concepts = set(concepts)
         elif algo == 'CBO':
             concepts = self._close_by_one(max_iters_num, max_num_attrs, min_num_objs, use_tqdm,
-                                          is_monotonic=is_monotonic)
+                                          is_monotonic=is_monotonic,)
             concepts = {Concept(tuple(self._context.get_objs(is_full=False)[c.get_extent()])
-                                    if len(c.get_extent()) > 0 else tuple(),
+                                   if len(c.get_extent()) > 0 else tuple(),
                                 tuple(self._context.get_attrs()[c.get_intent()])
                                     if len(c.get_intent()) > 0 else tuple()
                                 ) for c in concepts}
+            concepts = set(concepts)
         elif algo == 'mit':
             concepts = self._concepts_by_mit()
+            #d_objs = {g: idx for idx, g in enumerate(self._context.get_objs(is_full=False))}
+            #d_attrs = {m: idx for idx, m in enumerate(self._context.get_attrs(is_full=False))}
+            #concepts = {Concept(tuple([d_objs[g] for g in c.get_extent()] if len(c.get_extent())>0 else []),
+            #                    tuple([d_attrs[m] for m in c.get_intent()] if len(c.get_intent())>0 else [],)
+            #                    ) for c in concepts}
         else:
             raise ValueError('The only supported algorithm is CBO (CloseByOne) and "mit" (from library "concepts")')
 
@@ -71,20 +82,23 @@ class FormalManager:
                         for c in concepts}
 
         new_concepts = set()
-        for idx, c in enumerate(self.sort_concepts(concepts)):
+        for idx, c in tqdm(enumerate(self.sort_concepts(concepts)), desc='Postprocessing', disable=not use_tqdm,
+                           total=len(concepts)):
             ext_short = c.get_extent()
             int_short = c.get_intent()
 
             if not isinstance(self._context, MultiValuedContext):
-                int_ = [m_ for m in int_short for m_ in [m] + list(self._context.get_same_attrs(m))]
-                ext_ = [g_ for g in ext_short for g_ in [g] + list(self._context.get_same_objs(g))]
-                metrics = self._calc_metrics_inconcept(ext_) if len(ext_) > 0 else None
+                int_ = self._context.get_intent(ext_short, is_full=True, verb=True)
+                ext_ = self._context.get_extent(int_short, is_full=True, verb=True)
+                #int_ = [m_ for m in int_short for m_ in [m] + list(self._context.get_same_attrs(m))]
+                #ext_ = [g_ for g in ext_short for g_ in [g] + list(self._context.get_same_objs(g))]
+                metrics = self._calc_metrics_inconcept(ext_) if len(ext_) > 0 and calc_metrics else None
                 new_concepts.add(Concept(ext_, int_, idx=idx,
                                      metrics=metrics,
                                      extent_short=ext_short, intent_short=int_short,
                                      is_monotonic=is_monotonic))
             else:
-                metrics = self._calc_metrics_inconcept(ext_short) if len(ext_short) > 0 else None
+                metrics = self._calc_metrics_inconcept(ext_short) if len(ext_short) > 0 and calc_metrics else None
                 new_concepts.add(PatternStructure(ext_short, int_short, idx=idx,
                                     metrics=metrics,
                                     is_monotonic=is_monotonic,
@@ -164,23 +178,24 @@ class FormalManager:
         return ms
 
     def _close_by_one(self, max_iters_num, max_num_attrs, min_num_objs, use_tqdm, is_monotonic=False,
-                      iter_by_objects=False):
+                      iter_by_objects=False, ):
         cntx = self._context
-        n_attrs = len(cntx.get_attrs())
+        n_attrs = len(cntx.get_attrs(is_full=False))
 
         combs_to_check = [[]]
         concepts = set()
         if use_tqdm:
             if max_num_attrs is not None and min_num_objs is not None:
-                tot = min(sum([sp.misc.comb(N=n_attrs, k=x) for x in range(0, max_num_attrs + 1)]),
-                          sum([sp.misc.comb(N=n_attrs, k=x) for x in range(0, min_num_objs + 1)]))
+                tot = min(sum([sp.special.comb(N=n_attrs, k=x) for x in range(0, max_num_attrs + 1)]),
+                          sum([sp.special.comb(N=n_attrs, k=x) for x in range(0, min_num_objs + 1)]))
                 t = tqdm(total=tot)
             elif max_num_attrs is not None:
-                t = tqdm(total=sum([sp.misc.comb(N=n_attrs, k=x) for x in range(0, max_num_attrs + 1)]))
+                t = tqdm(total=sum([sp.special.comb(N=n_attrs, k=x) for x in range(0, max_num_attrs + 1)]))
             elif min_num_objs is not None:
-                t = tqdm(total=sum([sp.misc.comb(N=n_attrs, k=x) for x in range(0, min_num_objs + 1)]))
+                t = tqdm(total=sum([sp.special.comb(N=n_attrs, k=x) for x in range(0, min_num_objs + 1)]))
             else:
                 t = tqdm(total=len(combs_to_check))
+            t.set_description('Calculating concepts')
 
         iter = 0
         saved_ints = set()
@@ -192,11 +207,16 @@ class FormalManager:
 
             ext_ = cntx.get_extent(comb, trust_mode=True, verb=False)
             int_ = cntx.get_intent(ext_, trust_mode=True, verb=False)
+            #print(comb)
+            #print(ext_)
+            #print(int_)
+            #print('====================')
 
             if max_num_attrs is not None and len(comb) > max_num_attrs:
                 continue
             if min_num_objs is not None and len(ext_) <= min_num_objs:
                 continue
+
             new_int_ = [x for x in int_ if x not in comb]
 
             if (len(comb) > 0 and any([x < comb[-1] for x in new_int_])) or tuple(int_) in saved_ints:
@@ -214,10 +234,85 @@ class FormalManager:
                 if max_num_attrs is None or min_num_objs is not None:
                     t.total += len(new_combs)
 
+        t.close()
+
         if tuple([]) not in saved_ints:
             int_ = cntx.get_intent([], trust_mode=True, verb=False)
             ext_ = cntx.get_extent(int_, trust_mode=True, verb=False)
             concepts.add(Concept(ext_, int_))
+
+        return concepts
+
+    def _close_by_one_strong_limit(self, max_iters_num, max_num_attrs, min_num_objs, use_tqdm, is_monotonic=False,
+                      iter_by_objects=False, strongness_lower_bound=None):
+        cntx = self._context
+        n_objs = len(cntx.get_objs(is_full=False))
+
+        combs_to_check = [[]]
+        concepts = set()
+        if use_tqdm:
+            if max_num_attrs is not None and min_num_objs is not None:
+                tot = min(sum([sp.misc.comb(N=n_objs, k=x) for x in range(0, max_num_attrs + 1)]),
+                          sum([sp.misc.comb(N=n_objs, k=x) for x in range(0, min_num_objs + 1)]))
+                t = tqdm(total=tot)
+            elif max_num_attrs is not None:
+                t = tqdm(total=sum([sp.misc.comb(N=n_objs, k=x) for x in range(0, max_num_attrs + 1)]))
+            elif min_num_objs is not None:
+                t = tqdm(total=sum([sp.misc.comb(N=n_objs, k=x) for x in range(0, min_num_objs + 1)]))
+            else:
+                t = tqdm(total=len(combs_to_check))
+
+        iter = 0
+        saved_exts = set()
+        while len(combs_to_check) > 0:
+            iter += 1
+            if max_iters_num is not None and iter >= max_iters_num:
+                break
+            comb = combs_to_check.pop(0)
+
+            int_ = cntx.get_intent(comb, trust_mode=True, verb=False)
+            ext_ = cntx.get_extent(int_, trust_mode=True, verb=False)
+            print(comb)
+            print(ext_)
+            print(int_)
+            print('====================')
+
+            if max_num_attrs is not None and len(comb) > max_num_attrs:
+                continue
+            if min_num_objs is not None and len(ext_) <= min_num_objs:
+                continue
+
+            new_ext_ = [x for x in ext_ if x not in comb]
+
+            if (len(comb) > 0 and any([x < comb[-1] for x in new_ext_])) or tuple(ext_) in saved_exts:
+                if use_tqdm:
+                    t.update()
+                continue
+
+            if strongness_lower_bound is not None and len(ext_)>0:
+                ext_verb = cntx.get_extent(int_, trust_mode=True, verb=True,)
+                int_verb = cntx.get_intent(ext_verb, is_full=True)
+
+                ext_full = cntx.get_extent(int_verb,is_full=True)
+                ext_full_full = self._context_full.get_extent(int_verb, is_full=True)
+                strongness = len(ext_full)/len(ext_full_full) if len(ext_full) > 0 else 0
+                if strongness < strongness_lower_bound:
+                    continue
+
+            concepts.add(Concept(ext_, int_))
+            saved_exts.add(tuple(ext_))
+
+            new_combs = [ext_ + [x] for x in range((comb[-1] if len(comb) > 0 else -1) + 1, n_objs) if x not in ext_]
+            combs_to_check = new_combs + combs_to_check
+            if use_tqdm:
+                t.update()
+                if max_num_attrs is None or min_num_objs is not None:
+                    t.total += len(new_combs)
+
+#        if tuple([]) not in saved_exts:
+#            int_ = cntx.get_intent([], trust_mode=True, verb=False)
+#            ext_ = cntx.get_extent(int_, trust_mode=True, verb=False)
+#            concepts.add(Concept(ext_, int_))
 
         return concepts
 
@@ -498,11 +593,17 @@ class FormalManager:
     def calc_strongness(self, cntx_full, use_tqdm=False):
         for c in tqdm(self.get_concepts(), disable=not use_tqdm):
             if type(c) == Concept:
-                ext_ = cntx_full.get_extent([str(x) for x in c.get_intent()])
+                int_ = [str(x) for x in c.get_intent()]
+                assert all([x in cntx_full.get_attrs() for x in int_]), 'Some attributes are missing in cntx_full'
+                #int_ = [x for x in int_ if x in cntx_full.get_attrs(is_full=False)]
+
+                ext_ = c.get_extent()
+                ext_full = cntx_full.get_extent(int_, is_full=True)
             elif type(c) == PatternStructure:
-                ext_ = cntx_full.get_extent(c.get_intent(), trust_mode=True)
-            c._metrics['strongness'] = len(c.get_extent()) / len(ext_) \
-                if len(c.get_extent()) > 0 else 0
+                ext_ = c.get_extent()
+                ext_full = cntx_full.get_extent(c.get_intent(), trust_mode=True)
+            c._metrics['strongness'] = len(ext_) / len(ext_full) \
+                if len(ext_) > 0 else 0
 
     def filter_concepts(self, fltr):
         for c in self._concepts:

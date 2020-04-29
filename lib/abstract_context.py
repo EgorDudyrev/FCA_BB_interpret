@@ -1,7 +1,7 @@
 import numpy as np
 import pandas as pd
 
-from utils import get_not_none, repr_set
+from utils_ import get_not_none, repr_set
 
 class AbstractConcept:
     def __init__(self, extent, intent, idx=None, title=None,
