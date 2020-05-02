@@ -40,7 +40,7 @@ class FormalManager:
         #return sorted(concepts, key=lambda c: (len(c.get_intent()), ','.join(c.get_intent())))
         return sorted(concepts,
                       key=lambda c: (len(c._get_intent_as_array(c.get_intent())),
-                                     ','.join(c._get_intent_as_array(c.get_intent())))
+                                     ','.join([str(m) for m in c._get_intent_as_array(c.get_intent())]))
                       )
 
     def construct_concepts(self, algo='mit', max_iters_num=None, max_num_attrs=None, min_num_objs=None, use_tqdm=True,
@@ -234,7 +234,8 @@ class FormalManager:
                 if max_num_attrs is None or min_num_objs is not None:
                     t.total += len(new_combs)
 
-        t.close()
+        if use_tqdm:
+            t.close()
 
         if tuple([]) not in saved_ints:
             int_ = cntx.get_intent([], trust_mode=True, verb=False)
