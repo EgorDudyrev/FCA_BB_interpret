@@ -12,7 +12,7 @@ class PatternStructure(AbstractConcept):
                  metrics=None, extent_short=None, intent_short=None,
                  is_monotonic=False, cat_feats=None,
                  ):
-        assert type(intent) == dict, 'Pattern Structure intent should be of type dict'
+        assert intent is None or type(intent) == dict, 'Pattern Structure intent should be of type dict or None'
         super().__init__(extent, intent, idx, title, metrics, extent_short, intent_short, is_monotonic)
         self._cat_feats = cat_feats
 
@@ -20,9 +20,9 @@ class PatternStructure(AbstractConcept):
     def _get_intent_as_array(int_):
         return [(f"{k} in ["+', '.join([str(v_) if type(v_) != str else f'"{v_}"' for v_ in v]) +"]") \
                     if isinstance(v, Iterable) and type(v) != str else\
-                    f"{k} = {v}" for k, v in int_.items()]
+                    f"{k} = {v}" for k, v in int_.items()] if int_ is not None else []
 
-    def is_subconcept_of(self, c, trust_mode=False):
+    def is_subconcept_of(self, c, trust_mode=True):
         """if a is subconcept of b, a<=b"""
         assert self._is_monotonic == c._is_monotonic, 'Cannot compare monotonic and antimonotonic concepts'
         assert type(c) == PatternStructure, "Pattern Structures can be compared only with Pattern Structures"
@@ -77,6 +77,30 @@ class PatternStructure(AbstractConcept):
                             return False
                     return True
 
+    def pretty_repr(self, print_low_neighbs=False, print_up_neighbs=False, print_level=False, metrics_to_print=None,
+                    set_limit=5):
+        metrics_to_print = metrics_to_print if metrics_to_print!='all' else self._metrics.keys()
+
+        s = self._repr_concept_header(print_level)
+
+        for t in [(self._extent, 'extent', True),
+                  (self._get_intent_as_array(self._intent), 'intent', True),
+                  (self._new_objs, 'new extent', True),
+                  (self._new_attrs, 'new_intent', True),
+                  (self._low_neighbs, 'lower neighbours', print_low_neighbs),
+                  (self._up_neighbs, 'upper neighbours', print_up_neighbs), ]:
+            set_, set_name, flg = t
+            if not flg:
+                continue
+            set_ = {str(x).replace('__is__', '=').replace('__not__', '!=').replace('__lt__', '<').replace('__geq__', '>=')
+                    for x in set_}
+            s += repr_set(set_, set_name, lim=set_limit)
+
+        for k in metrics_to_print:
+            s += f"metric {k} = {self._metrics.get(k, 'Undefined')}\n"
+
+        return s
+
 
 class MultiValuedContext(AbstractContext):
     def __init__(self, data, objs=None, attrs=None, y_true=None, y_pred=None,  cat_attrs=None):
@@ -104,6 +128,9 @@ class MultiValuedContext(AbstractContext):
         raise NotImplementedError
 
     def get_extent(self, pattern, trust_mode=False, verb=True):
+        if pattern is None:
+            return []
+
         assert type(pattern) == dict, "Pattern should be of type dict: attr_name->(values_interval)"
         pattern = {str(k):v for k,v in pattern.items()}
         #ms_names = [str(x) for x in pattern.keys()]
@@ -136,26 +163,33 @@ class MultiValuedContext(AbstractContext):
     def get_intent(self, gs, trust_mode=False, verb=True, return_none=False):
         gs_idxs = self._get_ids_in_array(gs, self._objs, 'objects') if not trust_mode else gs
         if len(gs) == 0:
-            pattern = {k: None for k in self._attrs}
+            #pattern = {k: None for k in self._attrs}
+            #pattern = {k: [] if idx in self._cat_attrs_idxs else () for idx, k in enumerate(self._attrs)}
+            pattern = None
             return pattern
+
 
         pattern = {}
         for m_id, m in enumerate(self._attrs):
             k = m if verb else m_id
             if m_id in self._cat_attrs_idxs:
                 v = tuple(np.unique(self._data[gs_idxs, m_id]))
-                if len(v) == len(np.unique(self._data[:, m_id])):
-                    v = None
-                elif len(v) == 1:
+                #if len(v) == len(np.unique(self._data[:, m_id])):
+                #    v = None
+                #elif len(v) == 1:
+                #    v = v[0]
+                if len(v) == 1:
                     v = v[0]
             else:
                 v = self._data[gs_idxs, m_id]
                 v = None if any([v_ is None or np.isnan(v_) for v_ in v]) or len(v)==0 else v
                 if v is not None:
                     v = (min(v), max(v)) if isinstance(v, Iterable) and type(v)!=str else (v, v)
-                    if v[0] == self._data[:, m_id].min() and v[1] == self._data[:, m_id].max():
-                        v = None
-                    elif v[0] == v[1]:
+                    #if v[0] == self._data[:, m_id].min() and v[1] == self._data[:, m_id].max():
+                    #    v = None
+                    #elif v[0] == v[1]:
+                    #    v = v[0]
+                    if v[0] == v[1]:
                         v = v[0]
             pattern[k] = v
 

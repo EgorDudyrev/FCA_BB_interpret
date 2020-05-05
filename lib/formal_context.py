@@ -15,7 +15,7 @@ class Concept(AbstractConcept):
         assert type(intent) in [list, tuple, np.ndarray], 'Formal Concept intent should be of type list, tuple of np.array'
         super().__init__(extent, intent, idx, title, metrics, extent_short, intent_short, is_monotonic)
 
-    def is_subconcept_of(self, c):
+    def is_subconcept_of(self, c, trust_mode=True):
         """if a is subconcept of b, a<=b"""
         assert self._is_monotonic == c._is_monotonic, 'Cannot compare monotonic and antimonotonic concepts'
         if self._is_monotonic:

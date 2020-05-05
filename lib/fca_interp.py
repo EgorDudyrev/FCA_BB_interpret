@@ -38,10 +38,14 @@ class FormalManager:
 
     def sort_concepts(self, concepts):
         #return sorted(concepts, key=lambda c: (len(c.get_intent()), ','.join(c.get_intent())))
+        #return sorted(concepts,
+        ##              key=lambda c: (len(c._get_intent_as_array(c.get_intent())),
+         #                            ','.join([str(m) for m in c._get_intent_as_array(c.get_intent())]))
+         #             )
         return sorted(concepts,
-                      key=lambda c: (len(c._get_intent_as_array(c.get_intent())),
-                                     ','.join([str(m) for m in c._get_intent_as_array(c.get_intent())]))
-                      )
+                  key=lambda c: (-len(c.get_extent()),
+                                ','.join([str(g) for g in c.get_extent()]))
+                 )
 
     def construct_concepts(self, algo='mit', max_iters_num=None, max_num_attrs=None, min_num_objs=None, use_tqdm=True,
                            is_monotonic=False, strongness_lower_bound=None, calc_metrics=True):
@@ -98,8 +102,10 @@ class FormalManager:
                                      extent_short=ext_short, intent_short=int_short,
                                      is_monotonic=is_monotonic))
             else:
-                metrics = self._calc_metrics_inconcept(ext_short) if len(ext_short) > 0 and calc_metrics else None
-                new_concepts.add(PatternStructure(ext_short, int_short, idx=idx,
+                int_ = self._context.get_intent(ext_short, verb=True, trust_mode=True)
+                ext_ = self._context.get_extent(int_short, verb=True, trust_mode=True)
+                metrics = self._calc_metrics_inconcept(ext_) if len(ext_) > 0 and calc_metrics else None
+                new_concepts.add(PatternStructure(ext_, int_, idx=idx,
                                     metrics=metrics,
                                     is_monotonic=is_monotonic,
                                     cat_feats=self._cat_feats))
@@ -376,12 +382,27 @@ class FormalManager:
     def _find_new_concept_objatr(self):
         cncpt_dict = {c._idx: c for c in self._concepts}
         for c in self._concepts:
-            if c.get_upper_neighbs() is not None:
-                c._new_attrs = tuple(
-                    set(c.get_intent()) - {m for un_idx in c.get_upper_neighbs()
-                                           for m in cncpt_dict[un_idx].get_intent()})
+
+            if c.get_upper_neighbs() is not None and len(c.get_upper_neighbs())>0 and c.get_intent() is not None:
+                if type(c) == Concept:
+                    c._new_attrs = tuple(
+                        set(c.get_intent()) - {m for un_idx in c.get_upper_neighbs()
+                                               for m in cncpt_dict[un_idx].get_intent()})
+                else:
+                    new_attrs = set()
+                    try:
+                        for k,v in c.get_intent().items():
+                            if not any([ cncpt_dict[un_idx].get_intent() is not None
+                                         and cncpt_dict[un_idx].get_intent().get(k,None) == v for un_idx in  c.get_upper_neighbs()]):
+                                new_attrs.add(k)
+                    except Exception as e:
+                        print(f'Weird ps on objects: {c.get_extent()}, upper_neighbs: {c.get_upper_neighbs()}')
+                        raise(e)
+
+                    c._new_attrs = tuple(new_attrs)
             else:
-                c._new_attrs = tuple(c.get_intent())
+                c._new_attrs = tuple(c.get_intent()) if c.get_intent() is not None else tuple([])
+
             if c.get_lower_neighbs() is not None:
                 c._new_objs = tuple(
                     set(c.get_extent()) - {m for ln_idx in c.get_lower_neighbs()
@@ -602,7 +623,7 @@ class FormalManager:
                 ext_full = cntx_full.get_extent(int_, is_full=True)
             elif type(c) == PatternStructure:
                 ext_ = c.get_extent()
-                ext_full = cntx_full.get_extent(c.get_intent(), trust_mode=True)
+                ext_full = cntx_full.get_extent(c.get_intent())
             c._metrics['strongness'] = len(ext_) / len(ext_full) \
                 if len(ext_) > 0 else 0
 
