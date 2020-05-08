@@ -391,12 +391,14 @@ class FormalManager:
                 else:
                     new_attrs = set()
                     try:
-                        for k,v in c.get_intent().items():
+                        for k, v in c.get_intent().items():
                             if not any([ cncpt_dict[un_idx].get_intent() is not None
-                                         and cncpt_dict[un_idx].get_intent().get(k,None) == v for un_idx in  c.get_upper_neighbs()]):
+                                and type(cncpt_dict[un_idx].get_intent().get(k, None)) == type(v)
+                                and cncpt_dict[un_idx].get_intent().get(k, None) == v
+                                         for un_idx in  c.get_upper_neighbs()]):
                                 new_attrs.add(k)
                     except Exception as e:
-                        print(f'Weird ps on objects: {c.get_extent()}, upper_neighbs: {c.get_upper_neighbs()}')
+                        print(f'Weird ps {c.get_id()}, objects: {c.get_extent()}, upper_neighbs: {c.get_upper_neighbs()}')
                         raise(e)
 
                     c._new_attrs = tuple(new_attrs)

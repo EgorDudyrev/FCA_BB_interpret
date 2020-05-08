@@ -27,11 +27,12 @@ class PatternStructure(AbstractConcept):
         assert self._is_monotonic == c._is_monotonic, 'Cannot compare monotonic and antimonotonic concepts'
         assert type(c) == PatternStructure, "Pattern Structures can be compared only with Pattern Structures"
 
-        try:
-            if self._intent_short == c._intent_short and self._extent_short == c._extent_short:
-                return False
-        except Exception as e:
-            raise Exception(f'Cannot compare PatStructs: {self}, {c}\n{e}')
+        if not trust_mode:
+            try:
+                if self._intent_short == c._intent_short and self._extent_short == c._extent_short:
+                    return False
+            except Exception as e:
+                raise Exception(f'Cannot compare PatStructs: {self}, {c}\n{e}')
 
         if self._is_monotonic:
             if trust_mode:
@@ -153,8 +154,9 @@ class MultiValuedContext(AbstractContext):
             else:
                 #print('m_id:', type(m_id), 'v', v)
                 #print(self._cat_attrs_idxs)
-                v = sorted([v, v]) if type(v) in [float, int] else v
-                assert type(v) in [int, float] or len(v) == 2, f'Values of Real Valued attribute should be either int, float or tuple of len 2 (got {v} of type({type(v)}) feature {m_id}'
+                number_types = (int, float, np.int64, np.int32)
+                v = sorted([v, v]) if isinstance(v, number_types) else v
+                assert isinstance(v, number_types) or len(v) == 2, f'Values of Real Valued attribute should be either int, float or tuple of len 2 (got {v} of type({type(v)}) feature {m_id}'
                 ext = ext[ (self._data[ext, m_id] >= v[0]) & (self._data[ext, m_id] <= v[1]) ]
 
         ext = [str(self._objs[g]) for g in ext] if verb else list(ext)
