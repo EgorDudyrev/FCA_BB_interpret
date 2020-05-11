@@ -116,7 +116,7 @@ class MultiValuedContext(AbstractContext):
         self._objs = objs
         self._data = data
 
-        self.cat_attrs = cat_attrs
+        self.cat_attrs = get_not_none(cat_attrs, [])
         self._cat_attrs_idxs = [idx for idx, m in enumerate(attrs) if m in cat_attrs]
 
     def _reduce_context(self, data, objs, attrs):

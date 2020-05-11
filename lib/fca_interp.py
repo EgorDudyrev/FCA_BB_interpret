@@ -5,10 +5,14 @@ from tqdm.notebook import tqdm
 import concepts as concepts_mit
 import networkx as nx
 import plotly.graph_objects as go
+from datetime import datetime
+from frozendict import frozendict
+import json
 
 from formal_context import Concept, BinaryContext, Binarizer
 from pattern_structure import PatternStructure, MultiValuedContext
 from utils_ import get_not_none
+
 
 
 class FormalManager:
@@ -26,6 +30,9 @@ class FormalManager:
 
     def get_context(self):
         return self._context
+
+    def get_context_full(self):
+        return self._context_full
 
     def get_concepts(self):
         return self._concepts
@@ -48,8 +55,48 @@ class FormalManager:
                  )
 
     def construct_concepts(self, algo='mit', max_iters_num=None, max_num_attrs=None, min_num_objs=None, use_tqdm=True,
-                           is_monotonic=False, strongness_lower_bound=None, calc_metrics=True):
-        if isinstance(self._context, MultiValuedContext):
+                           is_monotonic=False, strongness_lower_bound=None, calc_metrics=True,
+                           strong_concepts=None, n_bootstrap_epochs=500, sample_size_bootstrap=15,
+                           n_best_bootstrap_concepts=None, agglomerative_strongness_delta=0.1,
+                           stab_min_bound_bootstrap=None):
+        if algo == 'FromMaxConcepts_Bootstrap':
+            max_cncpts = self.construct_max_strong_hyps(verb=True)
+            concepts, min_concepts_by_iters = self._agglomerative_concepts_construction(
+                max_cncpts,
+                strongness_delta=agglomerative_strongness_delta,
+                stab_min_bound=stab_min_bound_bootstrap,
+                bootstrap_sample_size=sample_size_bootstrap,
+                use_tqdm=use_tqdm,
+                n_epochs_bootstrap=n_bootstrap_epochs,
+                n_best_concepts_bootstrap=n_best_bootstrap_concepts,
+                verb=False)
+            self.min_concepts_by_iters = min_concepts_by_iters
+        elif algo == 'Agglomerative_Bootstrap':
+            #concepts = self._unite_bootstrap_concepts(strong_concepts, n_epochs=n_bootstrap_epochs,
+            #                                          sample_size=sample_size_bootstrap, use_tqdm=use_tqdm,
+            #                                          stab_min_bound=stab_min_bound_bootstrap, verb=False,
+            #                                          strongness_min_bound=strongness_lower_bound,
+            #                                          n_best_concepts=n_best_bootstrap_concepts, is_monotonic=is_monotonic)
+            concepts, min_concepts_by_iters = self._agglomerative_concepts_construction(
+                strong_concepts,
+                strongness_delta=agglomerative_strongness_delta,
+                stab_min_bound=stab_min_bound_bootstrap,
+                bootstrap_sample_size=sample_size_bootstrap,
+                use_tqdm=use_tqdm,
+                n_epochs_bootstrap=n_bootstrap_epochs,
+                n_best_concepts_bootstrap=n_best_bootstrap_concepts,
+                verb=False)
+            self.min_concepts_by_iters = min_concepts_by_iters
+        elif algo == 'FromMaxConcepts':
+            max_cncpts = self.construct_max_strong_hyps(verb=True)
+            concepts = self._close_by_one_concepts(max_cncpts, is_monotonic,
+                                                   strongness_min_bound=strongness_lower_bound, verb=False)
+            concepts = set(concepts)
+        elif algo == 'Agglomerative':
+            concepts = self._close_by_one_concepts(strong_concepts, is_monotonic,
+                                                   strongness_min_bound=strongness_lower_bound, verb=False)
+            concepts = set(concepts)
+        elif isinstance(self._context, MultiValuedContext):
             concepts = self._close_by_one_pattern_structure(max_iters_num, max_num_attrs, min_num_objs, use_tqdm,
                                           is_monotonic=is_monotonic)
             concepts = {c for c in concepts}
@@ -102,8 +149,8 @@ class FormalManager:
                                      extent_short=ext_short, intent_short=int_short,
                                      is_monotonic=is_monotonic))
             else:
-                int_ = self._context.get_intent(ext_short, verb=True, trust_mode=True)
-                ext_ = self._context.get_extent(int_short, verb=True, trust_mode=True)
+                int_ = self._context.get_intent(ext_short, verb=True, trust_mode=False)
+                ext_ = self._context.get_extent(int_short, verb=True, trust_mode=False)
                 metrics = self._calc_metrics_inconcept(ext_) if len(ext_) > 0 and calc_metrics else None
                 new_concepts.add(PatternStructure(ext_, int_, idx=idx,
                                     metrics=metrics,
@@ -354,6 +401,87 @@ class FormalManager:
 
             new_combs = [ext_ + [x] for x in range((comb[-1] if len(comb) > 0 else -1) + 1, n_objs) if x not in ext_]
             combs_to_check = new_combs + combs_to_check
+        return concepts
+
+    def _close_by_one_concepts(self, strong_concepts, is_monotonic=False, strongness_min_bound=0.5,
+                               verb=True):
+        cntx = self._context
+        cntx_full = self._context_full
+
+        if type(cntx) == MultiValuedContext:
+            concept_class = PatternStructure
+        else:
+            concept_class = Concept
+
+        n_concepts = len(strong_concepts)
+
+        combs_to_check = [[g_idx] for g_idx in range(len(strong_concepts))]
+        concepts = set()
+        iter_ = 0
+        saved_combs = set()
+
+        t0 = datetime.now()
+        while len(combs_to_check) > 0:
+            iter_ += 1
+
+            comb = combs_to_check.pop(0)
+
+            try:
+                ext_united = list(set([g for c_idx in comb for g in strong_concepts[
+                    c_idx].get_extent()]))  # transforming concepts to their common extents
+            except Exception as e:
+                if verb:
+                    print(comb, e)
+                raise e
+            if concept_class == Concept:
+                int_ = cntx.get_intent(ext_united, trust_mode=False, verb=True, is_full=True)
+                ext_ = cntx.get_extent(int_, trust_mode=False, verb=True, is_full=True)
+            else:
+                int_ = cntx.get_intent(ext_united, trust_mode=False, verb=True, )
+                ext_ = cntx.get_extent(int_, trust_mode=False, verb=True)
+
+            comb_ = [idx for idx, concept in enumerate(strong_concepts) if
+                     all([g in ext_ for g in concept.get_extent()])]  # transforming extents to their concepts
+
+            new_comb_ = [x for x in comb_ if x not in comb]
+
+            t1 = datetime.now()
+            dt = (t1 - t0).total_seconds()
+            try:
+                if verb:
+                    print(
+                        f"{iter_}: len(comb_)={len(comb_)}, first_in_comb: {comb_[0]}, new_comb_len:{len(new_comb_)}, time spend: {dt:.2f} sec, speed: {dt / iter_:.2f} sec/iter")
+            except Exception as e:
+                if verb:
+                    print(comb, comb_, e)
+                raise e
+
+            if (len(comb) > 0 and any([x < comb[-1] for x in new_comb_])) or tuple(comb_) in saved_combs:
+                continue
+
+            if strongness_min_bound is not None:
+                if concept_class == Concept:
+                    ext_full = cntx.get_extent(int_, trust_mode=False, verb=True, is_full=True)
+                    ext_full_ = cntx_full.get_extent(int_, trust_mode=False, verb=True, is_full=True)
+                else:
+                    ext_full = cntx.get_extent(int_, trust_mode=False, verb=True)
+                    ext_full_ = cntx_full.get_extent(int_, trust_mode=False, verb=True)
+                strongness = len(ext_full) / len(ext_full_) if len(ext_full) > 0 else 0
+                if strongness < strongness_min_bound:
+                    continue
+
+            if concept_class == Concept:
+                c = concept_class(ext_, int_)
+            else:
+                c = concept_class(ext_, int_, cat_feats=cntx._attrs[cntx._cat_attrs_idxs])
+            concepts.add(c)
+
+            saved_combs.add(tuple(comb_))
+
+            new_combs = [comb_ + [x] for x in range((comb[-1] if len(comb) > 0 else -1) + 1, n_concepts) if
+                         x not in comb_]
+            combs_to_check = new_combs + combs_to_check
+
         return concepts
 
     def _construct_lattice_connections(self, use_tqdm=True):
@@ -614,7 +742,8 @@ class FormalManager:
             c._metrics['lstab_min_bound'] = mindif - len(self.get_context().get_attrs(is_full=True))\
                 if mindif is not None else None
 
-    def calc_strongness(self, cntx_full, use_tqdm=False):
+    def calc_strongness(self, use_tqdm=False):
+        cntx_full = self._context_full
         for c in tqdm(self.get_concepts(), disable=not use_tqdm):
             if type(c) == Concept:
                 int_ = [str(x) for x in c.get_intent()]
@@ -633,3 +762,251 @@ class FormalManager:
         for c in self._concepts:
             if not fltr(c):
                 self.delete_concept(c.get_id())
+
+    def calc_cover_of_concepts(self, concepts=None):
+        concepts = self.get_concepts() if concepts is None else concepts
+        return set([g for c in concepts for g in c.get_extent()])#verb=True)])
+
+    def get_min_concepts(self, concepts=None, use_tqdm=True):
+        concepts = self.get_concepts() if concepts is None else concepts
+
+        concepts = sorted(concepts, key=lambda c: -len(c.get_extent()))
+        for i in tqdm(range(len(concepts)), disable=not use_tqdm):
+            if i >= len(concepts):
+                break
+
+            c = concepts[i]
+            lns = set([c_ for c_ in concepts if c_ != c and c_.is_subconcept_of(c)])
+            concepts = [c_ for c_ in concepts if c_ not in lns]
+        return concepts
+
+    def select_smallest_covering_hyps(self, concepts=None, use_tqdm=True, use_pruning=False):
+        concepts = self.get_concepts() if concepts is None else concepts
+
+        selected_hyps = []
+        n_added = []
+        n_covered = []
+        for i in tqdm(range(len(concepts)), disable=not use_tqdm):
+            cncpts_to_check = [c for c in concepts if c not in selected_hyps]
+            if len(cncpts_to_check) == 0:
+                break
+            cover = self.calc_cover_of_concepts(selected_hyps)
+            for c in cncpts_to_check:
+                c._metrics['n_uncovered'] = len([g for g in c.get_extent() if g not in cover])
+            cncpts_to_check = sorted(cncpts_to_check,
+                                     key=lambda c: (-c._metrics['n_uncovered'], -c._metrics['strongness']))
+            n_ = cncpts_to_check[0]._metrics['n_uncovered']
+            if n_ == 0:
+                break
+            selected_hyps.append(cncpts_to_check[0])
+            n_added.append(n_)
+            n_covered.append(len(self.calc_cover_of_concepts(selected_hyps)))
+
+        if use_pruning:
+            for i in tqdm(range(len(selected_hyps)), desc='pruning', disable=not use_tqdm):
+                cover = len(self.calc_cover_of_concepts(selected_hyps))
+                for c in selected_hyps:
+                    cover_ = len(self.calc_cover_of_concepts([c_ for c_ in selected_hyps if c_ != c]))
+                    if cover_ == cover:
+                        selected_hyps = [c_ for c_ in selected_hyps if c_ != c]
+                        break
+                else:
+                    break
+
+        return selected_hyps
+
+    def construct_bin_ds_from_ints(self, ints_, bin_ds_old):
+        bin_ds = pd.DataFrame()
+        for idx, int_ in enumerate(ints_):
+            bin_ds[f'int_{idx}'] = bin_ds_old[int_].all(1)
+        bin_ds.index = bin_ds_old.index
+        return bin_ds
+
+    def construct_max_strong_hyps(self, use_tqdm=True, verb=True):
+        cntx = self._context
+        cntx_full = self._context_full
+
+        concept_class = Concept if type(cntx) == BinaryContext else PatternStructure
+        objs_to_check = sorted(cntx.get_objs(is_full=True))
+        if not verb:
+            objs_to_check = cntx._get_ids_in_array(objs_to_check, cntx.get_objs(is_full=True), 'objects')
+
+        concepts = []
+        for i in tqdm(range(len(objs_to_check)), disable=not use_tqdm, desc='construct max strong hyps'):
+            if len(objs_to_check) == 0:
+                break
+            g = objs_to_check.pop(0)
+
+            int_ = cntx.get_intent([g], verb=verb, trust_mode=not verb)
+            ext_ = cntx.get_extent(int_, verb=verb, trust_mode=not verb)
+            ext_full = cntx_full.get_extent(int_, verb=verb, trust_mode=not verb)
+            strongness = len(ext_) / len(ext_full) if len(ext_) > 0 else 0
+            assert strongness == 1, f'Object {g} is not a strong hypothesis'
+
+            objs_to_check = [g_ for g_ in objs_to_check if g_ not in ext_]
+            if concept_class == Concept:
+                c = concept_class(ext_, int_, metrics={'strongness': strongness})
+            else:
+                c = concept_class(ext_, int_, metrics={'strongness': strongness},
+                                  cat_feats=list(cntx._attrs[cntx._cat_attrs_idxs]))
+            concepts.append(c)
+        return concepts
+
+    def _unite_bootstrap_concepts(self, base_concepts, n_epochs=500, sample_size=15, use_tqdm=True,
+                                 stab_min_bound=None, verb=False,
+                                 strongness_min_bound=0.5, n_best_concepts=None, is_monotonic=False):
+        cntx = self._context
+        cntx_full = self._context_full
+
+        concepts_bootstrap = []
+        for i in tqdm(range(n_epochs), disable=not use_tqdm, desc='boostrap aggregating'):
+            np.random.seed(i)
+            sample = np.random.choice(base_concepts, size=sample_size, replace=True)
+            concepts = self._close_by_one_concepts(sample, is_monotonic=is_monotonic,
+                                              strongness_min_bound=strongness_min_bound, verb=verb)
+            fm = FormalManager(cntx, context_full=cntx_full)
+            fm._concepts = concepts
+            fm.calc_strongness()
+            for idx, c in enumerate(fm.sort_concepts(concepts)):
+                c._idx = idx
+            fm.construct_lattice()
+            fm.calc_stability_approx()
+            if stab_min_bound is not None:
+                fm.filter_concepts(lambda c: get_not_none(c._metrics['stab_min_bound'], -100) >= stab_min_bound)
+
+            concepts = list(fm.get_concepts())
+            if n_best_concepts is not None:
+                concepts = sorted(concepts, key=lambda c:
+                    (-get_not_none(c._metrics['stab_min_bound'], -100),
+                    -get_not_none(c._metrics['strongness'], -100)))[:n_best_concepts]
+
+            concepts_bootstrap += concepts
+        return concepts_bootstrap
+
+    def get_unique_concepts(self, concepts=None):
+        concepts = self.get_concepts() if concepts is None else concepts
+
+        saw_ints = set()
+        unique_concepts = []
+        for c in concepts:
+            if c.get_intent() is None:
+                continue
+
+            int_ = tuple(c.get_intent()) if type(c) == Concept else frozendict(c.get_intent())
+            if int_ not in saw_ints:
+                unique_concepts.append(c)
+                saw_ints.add(int_)
+        return unique_concepts
+
+    def _agglomerative_concepts_construction(self, base_concepts, strongness_delta=0.1, stab_min_bound=0.5,
+                                            bootstrap_sample_size=15,
+                                            use_tqdm=True, n_epochs_bootstrap=100, n_best_concepts_bootstrap=10,
+                                            verb=True):
+        cntx = self._context
+        cntx_full = self._context_full
+
+        concept_class = {BinaryContext: Concept, MultiValuedContext: PatternStructure}[type(cntx)]
+        if concept_class == Concept:
+            int_ = cntx.get_intent([], is_full=True)
+            ext_ = cntx.get_extent(int_, is_full=True)
+            ext_full = cntx.get_extent(int_, is_full=True)
+            bottom_concept = concept_class(ext_, int_,
+                                           metrics={'strongness': len(ext_) / len(ext_full) if len(ext_) > 0 else 0})
+        else:
+            int_ = cntx.get_intent([])
+            ext_ = cntx.get_extent(int_)
+            ext_full = cntx.get_extent(int_)
+            bottom_concept = concept_class(ext_, int_,
+                                           metrics={'strongness': len(ext_) / len(ext_full) if len(ext_) > 0 else 0},
+                                           cat_feats=cntx._attrs[cntx._cat_attrs_idxs])
+
+        strong_bounds = np.arange(0, 1 + strongness_delta, strongness_delta)[::-1]
+        min_concepts_by_iters = {}
+        selected_concepts = []
+
+        mc = base_concepts.copy()
+        for iter_idx, strong_bound in tqdm(enumerate(strong_bounds), disable=not use_tqdm, total=len(strong_bounds),
+                                           desc='agglomerative construction'):
+            bs_concepts = self._unite_bootstrap_concepts(mc, sample_size=bootstrap_sample_size,
+                                                   stab_min_bound=stab_min_bound,
+                                                   n_epochs=n_epochs_bootstrap,
+                                                   n_best_concepts=n_best_concepts_bootstrap,
+                                                   strongness_min_bound=strong_bound)
+            unique_concepts = self.get_unique_concepts(bs_concepts)
+            if verb:
+                print(f'Iter {iter_idx}: num bs unique concepts: {len(unique_concepts)}')
+
+            concepts = unique_concepts + selected_concepts + [bottom_concept] + (base_concepts if iter_idx == 0 else [])
+            if verb:
+                print(f'Iter {iter_idx}: num concept to fm: {len(concepts)}')
+
+            fm = FormalManager(cntx)
+            fm._concepts = concepts
+            for idx, c in enumerate(fm.sort_concepts(concepts)):
+                c._idx = idx
+            fm.construct_lattice()
+            fm.calc_stability_approx()
+            concepts = fm.get_concepts()
+
+            if verb:
+                print(f'Iter {iter_idx}: cover of all concepts: {len(self.calc_cover_of_concepts(concepts))}')
+            if stab_min_bound is not None:
+                stab_concepts = [c for c in concepts if
+                                 get_not_none(c._metrics['stab_min_bound'], -100) >= stab_min_bound]
+            else:
+                stab_concepts = concepts
+
+            if verb:
+                print(f'Iter {iter_idx}: cover of stable concepts: {len(self.calc_cover_of_concepts(stab_concepts))}')
+
+            mc = self.select_smallest_covering_hyps(stab_concepts, use_pruning=True)
+            if verb:
+                print(f'Iter {iter_idx}: cover of min stable concepts: {len(self.calc_cover_of_concepts(mc))}')
+                print(f'Iter {iter_idx}: num of min stable concepts: {len(mc)}')
+            selected_concepts = self.get_unique_concepts(selected_concepts + mc)
+            if verb:
+                print(f'Iter {iter_idx}: num of selected concepts: {len(selected_concepts)}')
+                print(f'Iter {iter_idx}: cover of selected concepts: {len(self.calc_cover_of_concepts(selected_concepts))}')
+            min_concepts_by_iters[iter_idx] = mc
+        return selected_concepts, min_concepts_by_iters
+
+    def save_concepts_json(self, fname, concepts=None):
+        concepts = self.get_concepts() if concepts is None else concepts
+
+        concepts_json = {}
+        for c in concepts:
+            c_json = {}
+            c_json['extent'] = tuple(c.get_extent())
+            c_json['intent'] = tuple(c.get_intent()) if c.get_intent() is not None else None
+            c_json['low_neighbs'] = tuple(c.get_lower_neighbs())
+            c_json['up_neighbs'] = tuple(c.get_upper_neighbs())
+            c_json['metrics'] = c._metrics
+            concepts_json[c.get_id()] = c_json
+
+        with open(fname, 'w') as f:
+            json.dump(concepts_json, f)
+
+
+    def get_top_concept(self):
+        cntx = self._context
+
+        ext_ = list(cntx.get_objs(is_full=True))
+        int_ = cntx.get_intent(ext_)
+        if type(cntx) == BinaryContext:
+            c = Concept(ext_, int_)
+        else:
+            c = PatternStructure(ext_, int_, cat_feats=cntx._attrs[cntx._cat_attrs_idxs])
+
+        return c
+
+    def get_bottom_concept(self):
+        cntx = self._context
+
+        ext_ = []
+        int_ = cntx.get_intent(ext_)
+        if type(cntx) == BinaryContext:
+            c = Concept(ext_, int_)
+        else:
+            c = PatternStructure(ext_, int_, cat_feats=cntx._attrs[cntx._cat_attrs_idxs])
+
+        return c
