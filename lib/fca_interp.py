@@ -9,9 +9,9 @@ from datetime import datetime
 from frozendict import frozendict
 import json
 
-from formal_context import Concept, BinaryContext, Binarizer
-from pattern_structure import PatternStructure, MultiValuedContext
-from utils_ import get_not_none
+from .formal_context import Concept, BinaryContext, Binarizer
+from .pattern_structure import PatternStructure, MultiValuedContext
+from .utils_ import get_not_none
 
 
 
@@ -99,7 +99,12 @@ class FormalManager:
         elif isinstance(self._context, MultiValuedContext):
             concepts = self._close_by_one_pattern_structure(max_iters_num, max_num_attrs, min_num_objs, use_tqdm,
                                           is_monotonic=is_monotonic)
-            concepts = {c for c in concepts}
+            #concepts = {c for c in concepts}
+            concepts = {PatternStructure( tuple(self._context.get_objs()[c.get_extent()])
+                                        if len(c.get_extent()) > 0 else tuple(),
+                                         {self._context.get_attrs()[k]:v for k,v in c.get_intent().items() } 
+                                         if c.get_intent() is not None
+                                        ) for c in concepts}
         elif strongness_lower_bound is not None:
             concepts = self._close_by_one_strong_limit(max_iters_num, max_num_attrs, min_num_objs, use_tqdm,
                                           is_monotonic=is_monotonic, strongness_lower_bound=strongness_lower_bound)

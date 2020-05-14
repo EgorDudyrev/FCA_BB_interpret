@@ -3,8 +3,8 @@ from collections import Iterable
 
 from itertools import combinations, chain
 
-from abstract_context import AbstractConcept, AbstractContext
-from utils_ import get_not_none, repr_set
+from .abstract_context import AbstractConcept, AbstractContext
+from .utils_ import get_not_none, repr_set
 
 
 class PatternStructure(AbstractConcept):
