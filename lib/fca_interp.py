@@ -408,10 +408,11 @@ class FormalManager:
         cntx = self._context
         cntx_full = self._context_full
 
-        if type(cntx) == MultiValuedContext:
-            concept_class = PatternStructure
-        else:
-            concept_class = Concept
+        concept_class = Concept if isinstance(cntx, BinaryContext) \
+            else PatternStructure if isinstance(cntx, MultiValuedContext) \
+            else None
+        assert concept_class is not None, 'Context class is not recognized'
+
 
         n_concepts = len(strong_concepts)
 
@@ -489,7 +490,7 @@ class FormalManager:
         cncpts_map = {c.get_id(): c for c in self._concepts}
         all_low_neighbs = {c.get_id(): set() for c in self._concepts}
 
-        for cncpt_idx in tqdm(sorted(cncpts_map.keys(), key=lambda idx: -idx), disable=not use_tqdm):
+        for cncpt_idx in tqdm(sorted(cncpts_map.keys(), key=lambda idx: -idx), disable=not use_tqdm, desc='construct lattice connections'):
             concept = cncpts_map[cncpt_idx]
             concept._low_neighbs = set()
             possible_neighbs = set([idx for idx in cncpts_map.keys() if idx>cncpt_idx])
@@ -673,8 +674,9 @@ class FormalManager:
             node_color.append(get_not_none(self._get_metric(c, color_by), 'grey'))
             # node_color.append(c._mean_y if c._mean_y is not None else 'grey')
             # node_text.append('a\nbc')
-            node_text.append(c.pretty_repr(metrics_to_print=metrics_to_print).replace('\n', '<br>') + \
-                             '')  # f'\npos({pos[c._idx]})')
+            txt_ = c.pretty_repr(metrics_to_print=metrics_to_print).replace('\n', '<br>') + ''
+            txt_ = '<br>'.join([x[:50]+('...' if len(x)>50 else '') for x in txt_.split('<br>')])
+            node_text.append(txt_)
             new_attrs_str = '' if len(c._new_attrs) == 0 else \
                 f"{','.join(c._new_attrs) if c._new_attrs else ''}" if len(c._new_attrs) < new_attrs_lim \
                     else f"n: {len(c._new_attrs)}"
@@ -905,7 +907,11 @@ class FormalManager:
         cntx = self._context
         cntx_full = self._context_full
 
-        concept_class = {BinaryContext: Concept, MultiValuedContext: PatternStructure}[type(cntx)]
+        concept_class = Concept if isinstance(cntx, BinaryContext) \
+            else PatternStructure if isinstance(cntx, MultiValuedContext) \
+            else None
+        assert concept_class is not None, 'Context class is not recognized'
+        #concept_class = {BinaryContext: Concept, MultiValuedContext: PatternStructure}[type(cntx)]
         if concept_class == Concept:
             int_ = cntx.get_intent([], is_full=True)
             ext_ = cntx.get_extent(int_, is_full=True)
@@ -944,7 +950,7 @@ class FormalManager:
             fm._concepts = concepts
             for idx, c in enumerate(fm.sort_concepts(concepts)):
                 c._idx = idx
-            fm.construct_lattice()
+            fm.construct_lattice(use_tqdm=use_tqdm)
             fm.calc_stability_approx()
             concepts = fm.get_concepts()
 
