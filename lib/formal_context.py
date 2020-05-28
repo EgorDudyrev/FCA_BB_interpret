@@ -4,8 +4,8 @@ from tqdm.notebook import tqdm
 
 from itertools import combinations, chain
 
-from abstract_context import AbstractConcept, AbstractContext
-from utils_ import get_not_none, powerset, repr_set
+from .abstract_context import AbstractConcept, AbstractContext
+from .utils_ import get_not_none, powerset, repr_set
 
 
 class Concept(AbstractConcept):
@@ -177,12 +177,16 @@ class Binarizer:
         def binarize_ds(self, ds, cat_feats, thresholds, cases):
             bin_ds = pd.DataFrame()
             for f in cat_feats:
+                f_changed = False
                 if ds[f].nunique() == 2:
                     if ds[f].dtype == bool:
                         bin_ds[f"{f}__is__True"] = ds[f]
+                        f_changed = True
                     elif all(ds[f].unique() == [0, 1]):
                         bin_ds[f"{f}__is__True"] = ds[f].astype(bool)
-                    bin_ds[f"{f}__not__True"] = ~ds[f]
+                        f_changed = True
+                if f_changed:
+                    bin_ds[f"{f}__not__True"] = ~ds[f"{f}__is__True"]
                 else:
                     for v in ds[f].unique():
                         bin_ds[f"{f}__is__{v}"] = ds[f] == v
