@@ -103,7 +103,7 @@ class FormalManager:
             concepts = {PatternStructure( tuple(self._context.get_objs()[c.get_extent()])
                                         if len(c.get_extent()) > 0 else tuple(),
                                          {self._context.get_attrs()[k]:v for k,v in c.get_intent().items() } 
-                                         if c.get_intent() is not None
+                                         if c.get_intent() is not None else tuple()
                                         ) for c in concepts}
         elif strongness_lower_bound is not None:
             concepts = self._close_by_one_strong_limit(max_iters_num, max_num_attrs, min_num_objs, use_tqdm,
