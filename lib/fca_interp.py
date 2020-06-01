@@ -102,7 +102,7 @@ class FormalManager:
             #concepts = {c for c in concepts}
             concepts = {PatternStructure( tuple(self._context.get_objs()[c.get_extent()])
                                         if len(c.get_extent()) > 0 else tuple(),
-                                         {self._context.get_attrs()[k]:v for k,v in c.get_intent().items() } 
+                                         {self._context.get_attrs()[k] if type(k) not in [str, np.str_] else k: v for k, v in c.get_intent().items() }
                                          if c.get_intent() is not None else tuple()
                                         ) for c in concepts}
         elif strongness_lower_bound is not None:
@@ -940,7 +940,7 @@ class FormalManager:
                                            desc='agglomerative construction'):
             bs_concepts = self._unite_bootstrap_concepts(mc, sample_size=bootstrap_sample_size,
                                                    stab_min_bound=stab_min_bound,
-                                                   n_epochs=n_epochs_bootstrap,
+                                                   n_epochs=n_epochs_bootstrap if n_epochs_bootstrap!='2times' else (len(mc)//bootstrap_sample_size)*2,
                                                    n_best_concepts=n_best_concepts_bootstrap,
                                                    strongness_min_bound=strong_bound)
             unique_concepts = self.get_unique_concepts(bs_concepts)
@@ -989,8 +989,8 @@ class FormalManager:
             c_json = {}
             c_json['extent'] = tuple(c.get_extent())
             c_json['intent'] = tuple(c.get_intent()) if c.get_intent() is not None else None
-            c_json['low_neighbs'] = tuple(c.get_lower_neighbs())
-            c_json['up_neighbs'] = tuple(c.get_upper_neighbs())
+            c_json['low_neighbs'] = tuple(c.get_lower_neighbs()) if c.get_lower_neighbs() is not None else None
+            c_json['up_neighbs'] = tuple(c.get_upper_neighbs()) if c.get_upper_neighbs() is not None else None
             c_json['metrics'] = c._metrics
             concepts_json[c.get_id()] = c_json
 
