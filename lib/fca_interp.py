@@ -58,7 +58,7 @@ class FormalManager:
                            is_monotonic=False, strongness_lower_bound=None, calc_metrics=True,
                            strong_concepts=None, n_bootstrap_epochs=500, sample_size_bootstrap=15,
                            n_best_bootstrap_concepts=None, agglomerative_strongness_delta=0.1,
-                           stab_min_bound_bootstrap=None):
+                           stab_min_bound_bootstrap=None, agglomerative_verb=False):
         if algo == 'FromMaxConcepts_Bootstrap':
             max_cncpts = self.construct_max_strong_hyps(verb=True)
             concepts, min_concepts_by_iters = self._agglomerative_concepts_construction(
@@ -69,7 +69,7 @@ class FormalManager:
                 use_tqdm=use_tqdm,
                 n_epochs_bootstrap=n_bootstrap_epochs,
                 n_best_concepts_bootstrap=n_best_bootstrap_concepts,
-                verb=False)
+                verb=agglomerative_verb)
             self.min_concepts_by_iters = min_concepts_by_iters
         elif algo == 'Agglomerative_Bootstrap':
             #concepts = self._unite_bootstrap_concepts(strong_concepts, n_epochs=n_bootstrap_epochs,
@@ -85,7 +85,7 @@ class FormalManager:
                 use_tqdm=use_tqdm,
                 n_epochs_bootstrap=n_bootstrap_epochs,
                 n_best_concepts_bootstrap=n_best_bootstrap_concepts,
-                verb=False)
+                verb=agglomerative_verb)
             self.min_concepts_by_iters = min_concepts_by_iters
         elif algo == 'FromMaxConcepts':
             max_cncpts = self.construct_max_strong_hyps(verb=True)
@@ -103,7 +103,7 @@ class FormalManager:
             concepts = {PatternStructure( tuple(self._context.get_objs()[c.get_extent()])
                                         if len(c.get_extent()) > 0 else tuple(),
                                          {self._context.get_attrs()[k]:v for k,v in c.get_intent().items() } 
-                                         if c.get_intent() is not None
+                                         if c.get_intent() is not None else tuple(),
                                         ) for c in concepts}
         elif strongness_lower_bound is not None:
             concepts = self._close_by_one_strong_limit(max_iters_num, max_num_attrs, min_num_objs, use_tqdm,
