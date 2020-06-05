@@ -118,8 +118,8 @@ class AbstractContext:
             attrs = list(data.columns) if attrs is None else attrs
             data = data.values
         elif type(data) == np.ndarray:
-            objs = list(range(len(data.shape[1]))) if objs is None else objs
-            attrs = list(range(len(objs[0]))) if attrs is None else attrs
+            objs = list(range(data.shape[0])) if objs is None else objs
+            attrs = list(range(data.shape[1])) if attrs is None else attrs
         else:
             raise TypeError(f"DataType {type(data)} is not understood. np.ndarray or pandas.DataFrame is required")
 

@@ -1,5 +1,7 @@
 import numpy as np
 from collections import Iterable
+from nltk import ngrams
+from tqdm.notebook import  tqdm
 
 from itertools import combinations, chain
 
@@ -197,6 +199,157 @@ class MultiValuedContext(AbstractContext):
 
         pattern = {k: v for k, v in pattern.items() if v is not None} if not return_none else pattern
         return pattern
+
+    def __repr__(self):
+        s = f"Num of objects: {len(self._objs)}, Num of attrs: {len(self._attrs)}\n"
+        s += repr_set(self._objs, 'Objects', True, lim=5)
+        s += repr_set(self._attrs, 'Attrs', True, lim=5)
+        #s += self.get_table().head().__repr__()
+        return s
+
+    def calc_implications(self, max_len=None, use_tqdm=False):
+        raise NotImplementedError
+
+    def repr_implications(self, impls=None, max_len=None, use_tqdm=False):
+        raise NotImplementedError
+
+    def save_implications(self, impls=None, max_len=None, use_tqdm=False):
+        raise NotImplementedError
+
+
+class TextContext(MultiValuedContext): #AbstractContext):
+    def __init__(self, data, objs=None, attrs=None, y_true=None, y_pred=None,  cat_attrs=None):
+        super().__init__(data, objs, attrs, y_true, y_pred, cat_attrs)
+#        data, objs, attrs, y_true, y_pred = super()._check_input_data(data, objs, attrs, y_true, y_pred)
+
+#        self._data_full = data
+#        self._objs_full = objs
+#        self._attrs_full = attrs
+
+#        self._attrs = attrs
+#        self._objs = objs
+#        self._data = data
+
+#        self.cat_attrs = get_not_none(cat_attrs, [])
+#        self._cat_attrs_idxs = [idx for idx, m in enumerate(attrs) if m in cat_attrs]
+
+    def _reduce_context(self, data, objs, attrs):
+        raise NotImplementedError
+
+    def get_same_objs(self, g):
+        raise NotImplementedError
+
+    def get_same_attrs(self, m):
+        raise NotImplementedError
+
+    @staticmethod
+    def get_common_substrings(txts, verb=False):
+        if len(txts) == 1:
+            return [txts[0]]
+        txt_lemmes = [np.array(txt.split(' ')) for txt in txts]
+        txt_lemmes = sorted(txt_lemmes, key=lambda txt_l: len(txt_l))
+        txts = [' '.join(txt_l) for txt_l in txt_lemmes]
+
+        # find lexemes that exist in every txt
+        same_1w = []
+        for lex in txt_lemmes[0]:
+            if all([lex in txt_l for txt_l in txt_lemmes[1:]]):
+                same_1w.append(lex)
+        same_1w = list(set(same_1w))
+        if verb:
+            print(same_1w)
+
+        # going right of current lexemes
+        expanded = []
+        for lex in same_1w:
+            idxs = [idx for idx, l in enumerate(txt_lemmes[0]) if l == lex]
+            if verb:
+                print('lex', lex, 'idxs', idxs)
+            for idx in idxs:
+                # idx = np.argmax(lex==np.array(txt_lemmes[0]))
+                expanded.append(lex)
+                if verb:
+                    print('start', lex, 'same right', expanded)
+                for n in range(1, len(txt_lemmes[0]) - idx):
+                    lex_new = tuple(txt_lemmes[0][idx:idx + n + 1])
+                    if verb:
+                        print('lex new', lex_new)
+                    txt_new_lex = ' '.join(lex_new)
+                    for txt in txts[1:]:
+                        ngms = ngrams(txt.split(' '), len(lex_new))
+
+                        for ngm in ngms:
+                            if lex_new == ngm: # ngram found
+                                break
+                        else: # no ngram found
+                            break
+                    else: # found ngrams for every txt
+                        expanded[-1] = txt_new_lex
+                        continue
+                    # at least 1 ngram is not found
+                    break
+            if verb:
+                print('end', lex, 'same right', expanded)
+                print(' ')
+        expanded = sorted(expanded, key=lambda x: len(x.split(' ')))
+        if verb:
+            print('final', expanded)
+        cleansed = []
+        for idx, x in enumerate(expanded):
+            x_split = tuple(x.split(' '))
+            for txt in expanded[idx + 1:]:
+                ngms = ngrams(txt.split(' '), len(x_split))
+                for ngm in ngms:
+                    if verb:
+                        print('X:', x, 'TXT:', txt, 'NGM:', ngm)
+                    if x_split == ngm: # x is subsample of txt
+                        break
+                else: # x is not a subsample of txt
+                    continue
+                # x is subsample of txt
+                break
+            else: # x is not a subsample of any txt
+                cleansed.append(x)
+        if verb:
+            print('cleansed', cleansed)
+        return cleansed
+
+    @staticmethod
+    def get_text_with_patterns(ptrns, txts, use_tqdm=False):
+        selected_idxs = []
+        ptrns = sorted(ptrns, key=lambda ptrn: -len(ptrn.split(' ')))
+        for idx, txt in tqdm(enumerate(txts), total=len(txts), disable=not use_tqdm):
+            txt_split = txt.split(' ')
+            for ptrn in ptrns:
+                ptrn_split = tuple(ptrn.split(' '))
+                ngrms = ngrams(txt_split, len(ptrn_split))
+                for ngrm in ngrms:
+                    if ptrn_split == ngrm: # found ngram
+                        break
+                    else: # move to next ngram
+                        continue
+                else:
+                    break # no ngram found
+                # ngram found
+            else: # all ptrns found
+                selected_idxs.append(idx)
+        return selected_idxs
+
+    def get_extent(self, pattern, trust_mode=False, verb=True):
+        if pattern is None:
+            return []
+        pattern = pattern[self._attrs[0]]
+        txt_idxs = self.get_text_with_patterns(pattern, self._data_full[:, 0])
+        txts = self.get_objs()[txt_idxs] if verb else txt_idxs
+        return list(txts)
+
+    def get_intent(self, gs, trust_mode=False, verb=True, return_none=False):
+        gs_idxs = self._get_ids_in_array(gs, self._objs, 'objects') if not trust_mode else gs
+        if len(gs) == 0:
+            pattern = None
+            return pattern
+
+        return {self._attrs[0]: tuple(self.get_common_substrings(self._data_full[gs_idxs, 0]))}
 
     def __repr__(self):
         s = f"Num of objects: {len(self._objs)}, Num of attrs: {len(self._attrs)}\n"
