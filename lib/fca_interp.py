@@ -7,7 +7,9 @@ import networkx as nx
 import plotly.graph_objects as go
 from datetime import datetime
 from frozendict import frozendict
+import statistics
 import json
+from copy import deepcopy, copy
 
 from .formal_context import Concept, BinaryContext, Binarizer
 from .pattern_structure import PatternStructure, MultiValuedContext
@@ -43,7 +45,8 @@ class FormalManager:
             return None
         return cpt[0]
 
-    def sort_concepts(self, concepts):
+    def sort_concepts(self, concepts=None):
+        concepts = get_not_none(concepts, self._concepts)
         #return sorted(concepts, key=lambda c: (len(c.get_intent()), ','.join(c.get_intent())))
         #return sorted(concepts,
         ##              key=lambda c: (len(c._get_intent_as_array(c.get_intent())),
@@ -1021,3 +1024,45 @@ class FormalManager:
             c = PatternStructure(ext_, int_, cat_feats=cntx._attrs[cntx._cat_attrs_idxs])
 
         return c
+
+    def predict_context(self, cntx, metric='mean_y_true', aggfunc='mean'):
+        obj_concepts = {}
+        for c in self.get_concepts():
+            ext_ = cntx.get_extent(c.get_intent())
+            for g in ext_:
+                obj_concepts[g] = obj_concepts.get(g, []) + [c.get_id()]
+
+        obj_preds = {}
+        for g, cncpts_ids in obj_concepts.items():
+            cncpts_ids = [c_id for c_id in cncpts_ids if not any(
+                [self.get_concept_by_id(c_id1).is_subconcept_of(self.get_concept_by_id(c_id)) for c_id1 in cncpts_ids if
+                 c_id1 != c_id])]
+            preds = [self.get_concept_by_id(c_id)._metrics[metric] for c_id in cncpts_ids]
+
+            if aggfunc == 'mean':
+                preds = np.mean(preds)
+            elif aggfunc =='median':
+                preds = np.median(preds)
+            elif aggfunc == 'mode':
+                preds = statistics.mode(preds)
+            else:
+                raise ValueError(f'Given aggfunc "{aggfunc}" is unknown')
+            obj_preds[g] = preds
+
+        return [obj_preds.get(g) for g in cntx.get_objs()]
+
+    def set_concepts(self, concepts):
+        concepts = deepcopy(concepts)
+        for c in concepts:
+            ext_ = [g for g in c.get_extent() if g in self.get_context().get_objs()]
+            int_ = self.get_context().get_intent(ext_)
+            ext_ = self.get_context().get_extent(int_)
+
+            c._extent = ext_
+            c._intent = int_
+
+        concepts = self.get_unique_concepts(concepts)
+        for idx, c in enumerate(self.sort_concepts(concepts)):
+            c._idx = idx
+
+        self._concepts = concepts

@@ -200,6 +200,9 @@ class MultiValuedContext(AbstractContext):
         pattern = {k: v for k, v in pattern.items() if v is not None} if not return_none else pattern
         return pattern
 
+    def obj_of_pattern(self, obj_ptrn, pattern):
+        raise NotImplementedError
+
     def __repr__(self):
         s = f"Num of objects: {len(self._objs)}, Num of attrs: {len(self._attrs)}\n"
         s += repr_set(self._objs, 'Objects', True, lim=5)
@@ -350,6 +353,9 @@ class TextContext(MultiValuedContext): #AbstractContext):
             return pattern
 
         return {self._attrs[0]: tuple(self.get_common_substrings(self._data_full[gs_idxs, 0]))}
+
+    def obj_of_pattern(self, obj_ptrn, ptrn):
+        raise NotImplementedError
 
     def __repr__(self):
         s = f"Num of objects: {len(self._objs)}, Num of attrs: {len(self._attrs)}\n"
