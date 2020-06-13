@@ -156,7 +156,7 @@ class MultiValuedContext(AbstractContext):
             else:
                 #print('m_id:', type(m_id), 'v', v)
                 #print(self._cat_attrs_idxs)
-                number_types = (int, float, np.int64, np.int32)
+                number_types = (int, float, np.int64, np.int32, np.float32, np.float64)
                 v = sorted([v, v]) if isinstance(v, number_types) else v
                 assert isinstance(v, number_types) or len(v) == 2, f'Values of Real Valued attribute should be either int, float or tuple of len 2 (got {v} of type({type(v)}) feature {m_id}'
                 ext = ext[ (self._data[ext, m_id] >= v[0]) & (self._data[ext, m_id] <= v[1]) ]

@@ -1034,19 +1034,33 @@ class FormalManager:
 
         obj_preds = {}
         for g, cncpts_ids in obj_concepts.items():
-            cncpts_ids = [c_id for c_id in cncpts_ids if not any(
-                [self.get_concept_by_id(c_id1).is_subconcept_of(self.get_concept_by_id(c_id)) for c_id1 in cncpts_ids if
-                 c_id1 != c_id])]
-            preds = [self.get_concept_by_id(c_id)._metrics[metric] for c_id in cncpts_ids]
+            cncpts_ids = sorted(cncpts_ids, key=lambda x: -x)
+            for i in range(len(cncpts_ids)):
+                if i >= len(cncpts_ids):
+                    break
 
-            if aggfunc == 'mean':
-                preds = np.mean(preds)
-            elif aggfunc =='median':
-                preds = np.median(preds)
-            elif aggfunc == 'mode':
-                preds = statistics.mode(preds)
+                c_id = cncpts_ids[i]
+                c = self.get_concept_by_id(c_id)
+                cncpts_ids = [c_id1 for c_id1 in cncpts_ids \
+                              if c_id1 == c_id or not c.is_subconcept_of(self.get_concept_by_id(c_id1))]
+
+#            cncpts_ids = [c_id for c_id in cncpts_ids if not any(
+#                [self.get_concept_by_id(c_id1).is_subconcept_of(self.get_concept_by_id(c_id)) for c_id1 in cncpts_ids if
+#                 c_id1 != c_id])]
+            if type(metric) == list:
+                preds = np.array([[self.get_concept_by_id(c_id)._metrics[m] for m in metric] for c_id in cncpts_ids])
+                preds = preds.mean(0)
             else:
-                raise ValueError(f'Given aggfunc "{aggfunc}" is unknown')
+                preds = [self.get_concept_by_id(c_id)._metrics[metric] for c_id in cncpts_ids]
+
+                if aggfunc == 'mean':
+                    preds = np.mean(preds)
+                elif aggfunc =='median':
+                    preds = np.median(preds)
+                elif aggfunc == 'mode':
+                    preds = pd.Series(preds).value_counts().sort_values(ascending=False).index[0]# statistics.mode(preds)
+                else:
+                    raise ValueError(f'Given aggfunc "{aggfunc}" is unknown')
             obj_preds[g] = preds
 
         return [obj_preds.get(g) for g in cntx.get_objs()]
@@ -1066,3 +1080,29 @@ class FormalManager:
             c._idx = idx
 
         self._concepts = concepts
+
+    def get_metric_difference(self, metric):
+        diffs = {}
+        for c in self.get_concepts():
+            int_ = c.get_intent()
+            if int_ is None:
+                continue
+
+            un_idxs = c.get_upper_neighbs()
+            if un_idxs is None or len(un_idxs) == 0:
+                continue
+            for un_idx in un_idxs:
+                un = self.get_concept_by_id(un_idx)
+                un_int = un.get_intent()
+
+                metr_diff = c._metrics[metric] - un._metrics[metric]
+
+                new_int = {}
+                for k, v in int_.items():
+                    old_v = un_int.get(k)
+                    if type(old_v) != type(v) or (old_v != v):
+                        new_int[k] = v
+
+                for k in new_int.keys():
+                    diffs[k] = diffs.get(k, []) + [metr_diff / len(new_int)]
+        return diffs
