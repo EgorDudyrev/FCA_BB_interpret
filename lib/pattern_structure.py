@@ -31,37 +31,44 @@ class PatternStructure(AbstractConcept):
 
         if not trust_mode:
             try:
-                if self._intent_short == c._intent_short and self._extent_short == c._extent_short:
+#                if self._intent_short == c._intent_short and self._extent_short == c._extent_short:
+                if self._intent == c._intent and self._extent == c._extent:
                     return False
             except Exception as e:
                 raise Exception(f'Cannot compare PatStructs: {self}, {c}\n{e}')
 
         if self._is_monotonic:
             if trust_mode:
-                if not all([g in self._extent_short for g in c._extent_short]):
+#                if not all([g in self._extent_short for g in c._extent_short]):
+                if not all([g in self._extent for g in c._extent]):
                     return False
                 return True
             else:
                 raise NotImplementedError
         else:
-            if not all([g in c._extent_short for g in self._extent_short]):
+#            if not all([g in c._extent_short for g in self._extent_short]):
+            if not all([g in c._extent for g in self._extent]):
                 return False
 
             if trust_mode:
                 return True  # because extent is already smaller
 
-            for k1, v1 in c._intent_short.items():
+#            for k1, v1 in c._intent_short.items():
+            for k1, v1 in c._intent.items():
                 if v1 is None:
                     continue
 
-                if k1 not in self._intent_short:
+#                if k1 not in self._intent_short:
+                if k1 not in self._intent:
                     return False
 
                 if v1 in self._cat_feats:
-                    if not all([v in c._intent_short[k1] for v_ in v1]):
+#                    if not all([v in c._intent_short[k1] for v_ in v1]):
+                    if not all([v in c._intent[k1] for v_ in v1]):
                         return False
                 else:
-                    v = self._intent_short[k1]
+#                    v = self._intent_short[k1]
+                    v = self._intent[k1]
                     if isinstance(v1, Iterable) and type(v1) != str:
                         if isinstance(v, Iterable) and type(v) != str:
                             # v, v1 - iterables
@@ -342,7 +349,7 @@ class TextContext(MultiValuedContext): #AbstractContext):
         if pattern is None:
             return []
         pattern = pattern[self._attrs[0]]
-        txt_idxs = self.get_text_with_patterns(pattern, self._data_full[:, 0])
+        txt_idxs = self.get_text_with_patterns(pattern, self._data[:,0])#self._data_full[:, 0])
         txts = self.get_objs()[txt_idxs] if verb else txt_idxs
         return list(txts)
 
