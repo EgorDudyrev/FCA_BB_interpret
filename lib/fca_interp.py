@@ -10,6 +10,8 @@ from frozendict import frozendict
 import statistics
 import json
 from copy import deepcopy, copy
+from sklearn.preprocessing import LabelEncoder
+from sklearn.ensemble import RandomForestRegressor, RandomForestClassifier
 
 from .formal_context import Concept, BinaryContext, Binarizer
 from .pattern_structure import PatternStructure, MultiValuedContext
@@ -61,8 +63,11 @@ class FormalManager:
                            is_monotonic=False, strongness_lower_bound=None, calc_metrics=True,
                            strong_concepts=None, n_bootstrap_epochs=500, sample_size_bootstrap=15,
                            n_best_bootstrap_concepts=None, agglomerative_strongness_delta=0.1,
-                           stab_min_bound_bootstrap=None):
-        if algo == 'FromMaxConcepts_Bootstrap':
+                           stab_min_bound_bootstrap=None, y_type='True', rf_params={}):
+        if algo == 'RandomForest':
+            concepts = self._random_forest_concepts(y_type=y_type, rf_params=rf_params)
+            concepts = set(concepts)
+        elif algo == 'FromMaxConcepts_Bootstrap':
             max_cncpts = self.construct_max_strong_hyps(verb=True)
             concepts, min_concepts_by_iters = self._agglomerative_concepts_construction(
                 max_cncpts,
@@ -515,6 +520,44 @@ class FormalManager:
             concept._up_neighbs = set()
             for ln_idx in concept._low_neighbs:
                 cncpts_map[ln_idx]._up_neighbs.add(concept._idx)
+
+    def _random_forest_concepts(self,  y_type='True', rf_params={}):
+        cntx = self._context
+        X = cntx.get_data().copy()
+        if type(cntx) == MultiValuedContext:
+            for f_idx in cntx._cat_attrs_idxs:
+                le = LabelEncoder()
+                X[:, f_idx] = le.fit_transform(X[:, f_idx])
+
+        y = cntx._y_true if y_type == 'True' else cntx._y_pred
+
+        if len(set(y)) == 2:
+            rf_class = RandomForestClassifier
+        else:
+            rf_class = RandomForestRegressor
+
+        rf = rf_class(**rf_params)
+        rf.fit(X, y)
+        preds_rf = rf.predict(X)
+        #ds['preds_rf'] = rf.predict(X)
+        exts = list(set([
+            tuple(sorted(ext)) for est in rf.estimators_
+            for ext in self._parse_tree_to_extents(est, X, cntx._objs_full)]
+        ))
+        exts = list(set([tuple(cntx.get_extent(cntx.get_intent(ext))) for ext in exts]))
+
+        concepts = []
+        for ext in exts:
+            concept_class = Concept if type(cntx) == BinaryContext else PatternStructure
+            c = concept_class(ext, cntx.get_intent(ext))
+            concepts.append(c)
+        return concepts
+
+    @staticmethod
+    def _parse_tree_to_extents(tree, X, objs):
+        paths = tree.decision_path(X)
+        exts = [list(objs[(paths[:, i] == 1).todense().flatten().tolist()[0]]) for i in range(paths.shape[1])]
+        return exts
 
     def _find_new_concept_objatr(self):
         cncpt_dict = {c._idx: c for c in self._concepts}
