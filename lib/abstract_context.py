@@ -201,3 +201,10 @@ class AbstractContext:
     def get_table(self, is_full=True):
         return pd.DataFrame(self._data, index=self._objs_full if is_full else self._objs,
                             columns=self._attrs_full if is_full else self._attrs)
+
+    def drop_objects_from_context(self, objs_to_drop):
+        objs_save = [g for g in self.get_objs() if g not in objs_to_drop]
+        objs_ids = self._get_ids_in_array(objs_save, self.get_objs(), 'objects')
+        self._objs_full = np.array(objs_save)
+        self._objs = np.array([g for g in self._objs if g in objs_save])
+        self._data = self._data[objs_ids]

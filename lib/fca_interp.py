@@ -7,7 +7,11 @@ import networkx as nx
 import plotly.graph_objects as go
 from datetime import datetime
 from frozendict import frozendict
+import statistics
 import json
+from copy import deepcopy, copy
+from sklearn.preprocessing import LabelEncoder
+from sklearn.ensemble import RandomForestRegressor, RandomForestClassifier
 
 from .formal_context import Concept, BinaryContext, Binarizer
 from .pattern_structure import PatternStructure, MultiValuedContext
@@ -43,7 +47,8 @@ class FormalManager:
             return None
         return cpt[0]
 
-    def sort_concepts(self, concepts):
+    def sort_concepts(self, concepts=None):
+        concepts = get_not_none(concepts, self._concepts)
         #return sorted(concepts, key=lambda c: (len(c.get_intent()), ','.join(c.get_intent())))
         #return sorted(concepts,
         ##              key=lambda c: (len(c._get_intent_as_array(c.get_intent())),
@@ -58,8 +63,11 @@ class FormalManager:
                            is_monotonic=False, strongness_lower_bound=None, calc_metrics=True,
                            strong_concepts=None, n_bootstrap_epochs=500, sample_size_bootstrap=15,
                            n_best_bootstrap_concepts=None, agglomerative_strongness_delta=0.1,
-                           stab_min_bound_bootstrap=None, agglomerative_verb=False):
-        if algo == 'FromMaxConcepts_Bootstrap':
+                           stab_min_bound_bootstrap=None, y_type='True', rf_params={}):
+        if algo == 'RandomForest':
+            concepts = self._random_forest_concepts(y_type=y_type, rf_params=rf_params)
+            concepts = set(concepts)
+        elif algo == 'FromMaxConcepts_Bootstrap':
             max_cncpts = self.construct_max_strong_hyps(verb=True)
             concepts, min_concepts_by_iters = self._agglomerative_concepts_construction(
                 max_cncpts,
@@ -512,6 +520,44 @@ class FormalManager:
             concept._up_neighbs = set()
             for ln_idx in concept._low_neighbs:
                 cncpts_map[ln_idx]._up_neighbs.add(concept._idx)
+
+    def _random_forest_concepts(self,  y_type='True', rf_params={}):
+        cntx = self._context
+        X = cntx.get_data().copy()
+        if type(cntx) == MultiValuedContext:
+            for f_idx in cntx._cat_attrs_idxs:
+                le = LabelEncoder()
+                X[:, f_idx] = le.fit_transform(X[:, f_idx])
+
+        y = cntx._y_true if y_type == 'True' else cntx._y_pred
+
+        if len(set(y)) == 2:
+            rf_class = RandomForestClassifier
+        else:
+            rf_class = RandomForestRegressor
+
+        rf = rf_class(**rf_params)
+        rf.fit(X, y)
+        preds_rf = rf.predict(X)
+        #ds['preds_rf'] = rf.predict(X)
+        exts = list(set([
+            tuple(sorted(ext)) for est in rf.estimators_
+            for ext in self._parse_tree_to_extents(est, X, cntx._objs_full)]
+        ))
+        exts = list(set([tuple(cntx.get_extent(cntx.get_intent(ext))) for ext in exts]))
+
+        concepts = []
+        for ext in exts:
+            concept_class = Concept if type(cntx) == BinaryContext else PatternStructure
+            c = concept_class(ext, cntx.get_intent(ext))
+            concepts.append(c)
+        return concepts
+
+    @staticmethod
+    def _parse_tree_to_extents(tree, X, objs):
+        paths = tree.decision_path(X)
+        exts = [list(objs[(paths[:, i] == 1).todense().flatten().tolist()[0]]) for i in range(paths.shape[1])]
+        return exts
 
     def _find_new_concept_objatr(self):
         cncpt_dict = {c._idx: c for c in self._concepts}
@@ -1021,3 +1067,85 @@ class FormalManager:
             c = PatternStructure(ext_, int_, cat_feats=cntx._attrs[cntx._cat_attrs_idxs])
 
         return c
+
+    def predict_context(self, cntx, metric='mean_y_true', aggfunc='mean'):
+        obj_concepts = {}
+        for c in self.get_concepts():
+            ext_ = cntx.get_extent(c.get_intent())
+            for g in ext_:
+                obj_concepts[g] = obj_concepts.get(g, []) + [c.get_id()]
+
+        obj_preds = {}
+        for g, cncpts_ids in obj_concepts.items():
+            cncpts_ids = sorted(cncpts_ids, key=lambda x: -x)
+            for i in range(len(cncpts_ids)):
+                if i >= len(cncpts_ids):
+                    break
+
+                c_id = cncpts_ids[i]
+                c = self.get_concept_by_id(c_id)
+                cncpts_ids = [c_id1 for c_id1 in cncpts_ids \
+                              if c_id1 == c_id or not c.is_subconcept_of(self.get_concept_by_id(c_id1))]
+
+#            cncpts_ids = [c_id for c_id in cncpts_ids if not any(
+#                [self.get_concept_by_id(c_id1).is_subconcept_of(self.get_concept_by_id(c_id)) for c_id1 in cncpts_ids if
+#                 c_id1 != c_id])]
+            if type(metric) == list:
+                preds = np.array([[self.get_concept_by_id(c_id)._metrics[m] for m in metric] for c_id in cncpts_ids])
+                preds = preds.mean(0)
+            else:
+                preds = [self.get_concept_by_id(c_id)._metrics[metric] for c_id in cncpts_ids]
+
+                if aggfunc == 'mean':
+                    preds = np.mean(preds)
+                elif aggfunc =='median':
+                    preds = np.median(preds)
+                elif aggfunc == 'mode':
+                    preds = pd.Series(preds).value_counts().sort_values(ascending=False).index[0]# statistics.mode(preds)
+                else:
+                    raise ValueError(f'Given aggfunc "{aggfunc}" is unknown')
+            obj_preds[g] = preds
+
+        return [obj_preds.get(g) for g in cntx.get_objs()]
+
+    def set_concepts(self, concepts):
+        concepts = deepcopy(concepts)
+        for c in concepts:
+            ext_ = [g for g in c.get_extent() if g in self.get_context().get_objs()]
+            int_ = self.get_context().get_intent(ext_)
+            ext_ = self.get_context().get_extent(int_)
+
+            c._extent = ext_
+            c._intent = int_
+
+        concepts = self.get_unique_concepts(concepts)
+        for idx, c in enumerate(self.sort_concepts(concepts)):
+            c._idx = idx
+
+        self._concepts = concepts
+
+    def get_metric_difference(self, metric):
+        diffs = {}
+        for c in self.get_concepts():
+            int_ = c.get_intent()
+            if int_ is None:
+                continue
+
+            un_idxs = c.get_upper_neighbs()
+            if un_idxs is None or len(un_idxs) == 0:
+                continue
+            for un_idx in un_idxs:
+                un = self.get_concept_by_id(un_idx)
+                un_int = un.get_intent()
+
+                metr_diff = c._metrics[metric] - un._metrics[metric]
+
+                new_int = {}
+                for k, v in int_.items():
+                    old_v = un_int.get(k)
+                    if type(old_v) != type(v) or (old_v != v):
+                        new_int[k] = v
+
+                for k in new_int.keys():
+                    diffs[k] = diffs.get(k, []) + [metr_diff / len(new_int)]
+        return diffs

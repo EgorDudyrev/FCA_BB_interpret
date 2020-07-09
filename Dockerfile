@@ -31,6 +31,7 @@ RUN conda install -y -c anaconda networkx=2.4
 RUN pip install frozendict
 RUN pip install keras
 RUN pip install tensorflow
+RUN conda install -c conda-forge shap
 
 # Configuring access to Jupyter
 #RUN mkdir /opt/notebooks
