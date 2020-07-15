@@ -63,9 +63,9 @@ class FormalManager:
                            is_monotonic=False, strongness_lower_bound=None, calc_metrics=True,
                            strong_concepts=None, n_bootstrap_epochs=500, sample_size_bootstrap=15,
                            n_best_bootstrap_concepts=None, agglomerative_strongness_delta=0.1,
-                           stab_min_bound_bootstrap=None, y_type='True', rf_params={}):
+                           stab_min_bound_bootstrap=None, y_type='True', rf_params={}, rf_class=None):
         if algo == 'RandomForest':
-            concepts = self._random_forest_concepts(y_type=y_type, rf_params=rf_params)
+            concepts = self._random_forest_concepts(y_type=y_type, rf_params=rf_params, rf_class=rf_class)
             concepts = set(concepts)
         elif algo == 'FromMaxConcepts_Bootstrap':
             max_cncpts = self.construct_max_strong_hyps(verb=True)
@@ -521,9 +521,10 @@ class FormalManager:
             for ln_idx in concept._low_neighbs:
                 cncpts_map[ln_idx]._up_neighbs.add(concept._idx)
 
-    def _random_forest_concepts(self,  y_type='True', rf_params={}):
+    def _random_forest_concepts(self,  y_type='True', rf_params={}, rf_class=None):
         cntx = self._context
-        X = cntx.get_data().copy()
+        #X = cntx.get_data().copy()
+        X = cntx._data.copy()
         if type(cntx) == MultiValuedContext:
             for f_idx in cntx._cat_attrs_idxs:
                 le = LabelEncoder()
@@ -531,10 +532,11 @@ class FormalManager:
 
         y = cntx._y_true if y_type == 'True' else cntx._y_pred
 
-        if len(set(y)) == 2:
-            rf_class = RandomForestClassifier
-        else:
-            rf_class = RandomForestRegressor
+        if rf_class is None:
+            if len(set(y)) == 2:
+                rf_class = RandomForestClassifier
+            else:
+                rf_class = RandomForestRegressor
 
         rf = rf_class(**rf_params)
         rf.fit(X, y)
