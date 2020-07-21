@@ -12,6 +12,7 @@ import json
 from copy import deepcopy, copy
 from sklearn.preprocessing import LabelEncoder
 from sklearn.ensemble import RandomForestRegressor, RandomForestClassifier
+from joblib import Parallel, delayed
 
 from .formal_context import Concept, BinaryContext, Binarizer
 from .pattern_structure import PatternStructure, MultiValuedContext
@@ -542,11 +543,16 @@ class FormalManager:
         rf.fit(X, y)
         preds_rf = rf.predict(X)
         #ds['preds_rf'] = rf.predict(X)
-        exts = list(set([
-            tuple(sorted(ext)) for est in rf.estimators_
-            for ext in self._parse_tree_to_extents(est, X, cntx._objs_full)]
-        ))
-        exts = list(set([tuple(cntx.get_extent(cntx.get_intent(ext))) for ext in exts]))
+        exts_by_estim = Parallel(-1)(delayed(self._parse_tree_to_extents)(est, X, cntx._objs_full) for est in rf.estimators_)
+        exts = set()
+        for exts_be in exts_by_estim:
+            exts |= set(exts_be)
+        exts = list(exts)
+        #exts = list(set([
+        #    tuple(sorted(ext)) for est in rf.estimators_
+        #    for ext in self._parse_tree_to_extents(est, X, cntx._objs_full)]
+        #))
+        #exts = list(set([tuple(cntx.get_extent(cntx.get_intent(ext))) for ext in exts]))
 
         concepts = []
         for ext in exts:
@@ -556,9 +562,11 @@ class FormalManager:
         return concepts
 
     @staticmethod
-    def _parse_tree_to_extents(tree, X, objs):
-        paths = tree.decision_path(X)
-        exts = [list(objs[(paths[:, i] == 1).todense().flatten().tolist()[0]]) for i in range(paths.shape[1])]
+    def _parse_tree_to_extents(tree, X, objs, n_jobs=-1):
+        paths = tree.decision_path(X).tocsc()
+        f = lambda i, paths: tuple(objs[(paths[:, i] == 1).todense().flatten().tolist()[0]])
+
+        exts = Parallel(n_jobs)([delayed(f)(i, paths) for i in range(paths.shape[1])])
         return exts
 
     def _find_new_concept_objatr(self):
@@ -1072,31 +1080,34 @@ class FormalManager:
 
     def predict_context(self, cntx, metric='mean_y_true', aggfunc='mean'):
         obj_concepts = {}
+        cncpts_dict = {c.get_id(): c for c in self.get_concepts()}
         for c in self.get_concepts():
             ext_ = cntx.get_extent(c.get_intent())
             for g in ext_:
-                obj_concepts[g] = obj_concepts.get(g, []) + [c.get_id()]
+                obj_concepts[g] = obj_concepts.get(g, set()) | set([c.get_id()]) - set(c.get_upper_neighbs())
 
-        obj_preds = {}
-        for g, cncpts_ids in obj_concepts.items():
-            cncpts_ids = sorted(cncpts_ids, key=lambda x: -x)
-            for i in range(len(cncpts_ids)):
-                if i >= len(cncpts_ids):
-                    break
+        obj_preds = []
+        #for g, cncpts_ids in obj_concepts.items():
+        for g in cntx.get_objs():
+            cncpts_ids = sorted(obj_concepts[g], key=lambda x: -x)
+            #for i in range(len(cncpts_ids)):
+            #    if i >= len(cncpts_ids):
+            #        break
 
-                c_id = cncpts_ids[i]
-                c = self.get_concept_by_id(c_id)
-                cncpts_ids = [c_id1 for c_id1 in cncpts_ids \
-                              if c_id1 == c_id or not c.is_subconcept_of(self.get_concept_by_id(c_id1))]
+            #    c_id = cncpts_ids[i]
+            #    c = cncpts_dict[c_id]
+
+            #    cncpts_ids = [c_id1 for c_id1 in cncpts_ids \
+            #                  if c_id1 == c_id or not c.is_subconcept_of(cncpts_dict[c_id1])]
 
 #            cncpts_ids = [c_id for c_id in cncpts_ids if not any(
 #                [self.get_concept_by_id(c_id1).is_subconcept_of(self.get_concept_by_id(c_id)) for c_id1 in cncpts_ids if
 #                 c_id1 != c_id])]
             if type(metric) == list:
-                preds = np.array([[self.get_concept_by_id(c_id)._metrics[m] for m in metric] for c_id in cncpts_ids])
+                preds = np.array([[cncpts_dict[c_id]._metrics[m] for m in metric] for c_id in cncpts_ids])
                 preds = preds.mean(0)
             else:
-                preds = [self.get_concept_by_id(c_id)._metrics[metric] for c_id in cncpts_ids]
+                preds = [cncpts_dict[c_id]._metrics[metric] for c_id in cncpts_ids]
 
                 if aggfunc == 'mean':
                     preds = np.mean(preds)
@@ -1106,9 +1117,10 @@ class FormalManager:
                     preds = pd.Series(preds).value_counts().sort_values(ascending=False).index[0]# statistics.mode(preds)
                 else:
                     raise ValueError(f'Given aggfunc "{aggfunc}" is unknown')
-            obj_preds[g] = preds
+            obj_preds.append(preds)
+            #obj_preds[g] = preds
 
-        return [obj_preds.get(g) for g in cntx.get_objs()]
+        return obj_preds
 
     def set_concepts(self, concepts):
         concepts = deepcopy(concepts)

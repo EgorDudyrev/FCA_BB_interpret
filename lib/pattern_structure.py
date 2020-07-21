@@ -47,7 +47,8 @@ class PatternStructure(AbstractConcept):
                 raise NotImplementedError
         else:
 #            if not all([g in c._extent_short for g in self._extent_short]):
-            if not all([g in c._extent for g in self._extent]):
+            #if not all([g in c._extent for g in self._extent]):
+            if not set(self._extent)&(set(c._extent))==set(self._extent):
                 return False
 
             if trust_mode:
