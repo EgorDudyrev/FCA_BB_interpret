@@ -48,7 +48,11 @@ class PatternStructure(AbstractConcept):
         else:
 #            if not all([g in c._extent_short for g in self._extent_short]):
             #if not all([g in c._extent for g in self._extent]):
-            if not set(self._extent)&(set(c._extent))==set(self._extent):
+            if len(self._extent) > len(c._extent):
+                return False
+
+            ext1, ext2 = set(self._extent), set(c._extent)
+            if not ext1 & ext2 == ext1:
                 return False
 
             if trust_mode:

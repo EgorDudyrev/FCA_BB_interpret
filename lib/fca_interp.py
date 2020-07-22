@@ -522,6 +522,33 @@ class FormalManager:
             for ln_idx in concept._low_neighbs:
                 cncpts_map[ln_idx]._up_neighbs.add(concept._idx)
 
+    def _construct_spanning_tree(self, use_tqdm=True):
+        n_concepts = len(self._concepts)
+        cncpts_map = {c.get_id(): c for c in self._concepts}
+
+        for cncpt_idx in tqdm(sorted(cncpts_map.keys(), key=lambda idx: idx),
+                              disable=not use_tqdm, desc='construct spanning tree'):
+            c = cncpts_map[cncpt_idx]
+            c._low_neighbs_st = set()
+            if c._up_neighbs is not None and len(c._up_neighbs)>0:
+                pn_idx = min(c._up_neighbs)
+                c._up_neighb_st = pn_idx
+                cncpts_map[pn_idx]._low_neighbs_st.add(cncpt_idx)
+                continue
+
+            pn_idx = cncpt_idx-1
+            while pn_idx >= 0:
+                if c.is_subconcept_of(cncpts_map[pn_idx]):
+                    c._up_neighb_st = pn_idx
+                    cncpts_map[pn_idx]._low_neighbs_st.add(cncpt_idx)
+
+                    break
+
+                pn_idx -= 1
+            else:
+                c._up_neighb_st = None
+
+
     def _random_forest_concepts(self,  y_type='True', rf_params={}, rf_class=None):
         cntx = self._context
         #X = cntx.get_data().copy()
@@ -613,8 +640,10 @@ class FormalManager:
             else:
                 c._level = max([self.get_concept_by_id(un_id)._level for un_id in c.get_upper_neighbs()]) + 1
 
-    def construct_lattice(self, use_tqdm=False):
-        self._construct_lattice_connections(use_tqdm)
+    def construct_lattice(self, use_tqdm=False, only_spanning_tree=False):
+        if not only_spanning_tree:
+            self._construct_lattice_connections(use_tqdm)
+        self._construct_spanning_tree(use_tqdm)
         self._calc_concept_levels()
         self._find_new_concept_objatr()
 
@@ -1078,54 +1107,60 @@ class FormalManager:
 
         return c
 
-    def predict_context(self, cntx, metric='mean_y_true', aggfunc='mean'):
-        obj_concepts = {}
+    def predict_context(self, cntx, metric='mean_y_true',):
+        cncpts_exts = {}
+        def get_extent(c):
+            if c.get_id() not in cncpts_exts:
+                cncpts_exts[c.get_id()] = set(cntx.get_extent(c.get_intent(), verb=False))
+            return cncpts_exts[c.get_id()]
+
+        metric = metric if type(metric) == list else [metric]
+
+        cncpts_to_check = set([0])
         cncpts_dict = {c.get_id(): c for c in self.get_concepts()}
-        for c in self.get_concepts():
-            ext_ = cntx.get_extent(c.get_intent())
-            for g in ext_:
-                obj_concepts[g] = obj_concepts.get(g, set()) | set([c.get_id()]) - set(c.get_upper_neighbs())
+        objs_dict = {g: idx for idx, g in enumerate(cntx.get_objs())}
+        objs_preds = [[] for g in cntx.get_objs()]
+        objs_preds_sum = np.zeros((len(cntx.get_objs()), len(metric)))
+        objs_preds_cnt = np.zeros(len(cntx.get_objs()))
 
-        obj_preds = []
-        #for g, cncpts_ids in obj_concepts.items():
-        for g in cntx.get_objs():
-            cncpts_ids = sorted(obj_concepts[g], key=lambda x: -x)
-            #for i in range(len(cncpts_ids)):
-            #    if i >= len(cncpts_ids):
-            #        break
+        for i in range(len(self.get_concepts())):
+            if len(cncpts_to_check) == 0:
+                break
 
-            #    c_id = cncpts_ids[i]
-            #    c = cncpts_dict[c_id]
+            c_id = min(cncpts_to_check)
+            cncpts_to_check.remove(c_id)
 
-            #    cncpts_ids = [c_id1 for c_id1 in cncpts_ids \
-            #                  if c_id1 == c_id or not c.is_subconcept_of(cncpts_dict[c_id1])]
+            c = cncpts_dict[c_id]
+            ext = get_extent(c)
 
-#            cncpts_ids = [c_id for c_id in cncpts_ids if not any(
-#                [self.get_concept_by_id(c_id1).is_subconcept_of(self.get_concept_by_id(c_id)) for c_id1 in cncpts_ids if
-#                 c_id1 != c_id])]
-            if type(metric) == list:
-                preds = np.array([[cncpts_dict[c_id]._metrics[m] for m in metric] for c_id in cncpts_ids])
-                preds = preds.mean(0)
-            else:
-                preds = [cncpts_dict[c_id]._metrics[metric] for c_id in cncpts_ids]
+            ext_ln = set()
+            for ln_id in c._low_neighbs_st: #c.get_lower_neighbs():
+                ln = cncpts_dict[ln_id]
+                ext_ln |= get_extent(ln)
+            ext_to_stop = ext-ext_ln
+            preds = [c._metrics[m] for m in metric]
+            #objs_preds_sum[[objs_dict[g] for g in ext_to_stop]] += preds
+            objs_preds_sum[list(ext_to_stop)] += preds
+            objs_preds_cnt += 1
+            #for g in ext_to_stop:
+            #    g_id = objs_dict[g]
+            #    objs_preds[g_id].append(c._metrics[metric])
 
-                if aggfunc == 'mean':
-                    preds = np.mean(preds)
-                elif aggfunc =='median':
-                    preds = np.median(preds)
-                elif aggfunc == 'mode':
-                    preds = pd.Series(preds).value_counts().sort_values(ascending=False).index[0]# statistics.mode(preds)
-                else:
-                    raise ValueError(f'Given aggfunc "{aggfunc}" is unknown')
-            obj_preds.append(preds)
-            #obj_preds[g] = preds
+            cncpts_to_check |= set([ln_id for ln_id in c._low_neighbs_st #c.get_lower_neighbs()
+                                    if len(get_extent(cncpts_dict[ln_id]))>0 ] )
 
-        return obj_preds
+        #final_preds = []
+        #for preds in objs_preds:
+        #    final_preds.append(np.mean(preds))
+        final_preds = (objs_preds_sum.T/objs_preds_cnt).T
+
+        return final_preds
 
     def set_concepts(self, concepts):
         concepts = deepcopy(concepts)
+        objs = set(self.get_context().get_objs())
         for c in concepts:
-            ext_ = [g for g in c.get_extent() if g in self.get_context().get_objs()]
+            ext_ = [g for g in c.get_extent() if g in objs]
             int_ = self.get_context().get_intent(ext_)
             ext_ = self.get_context().get_extent(int_)
 
