@@ -530,6 +530,56 @@ class FormalManager:
                               disable=not use_tqdm, desc='construct spanning tree'):
             c = cncpts_map[cncpt_idx]
             c._low_neighbs_st = set()
+            if cncpt_idx == 0:
+                c._up_neighb_st = None
+                continue
+
+            un_idx = 0
+            sifted = True
+            while sifted:
+                un = cncpts_map[un_idx]
+                for ln_idx in un._low_neighbs_st:
+                    ln = cncpts_map[ln_idx]
+                    if c.is_subconcept_of(ln):
+                        un_idx = ln_idx
+                        sifted = True
+                        break
+                else:
+                    sifted = False
+            un._low_neighbs_st.add(cncpt_idx)
+            c._up_neighb_st = un_idx
+
+
+            #if c._up_neighbs is not None and len(c._up_neighbs)>0:
+            #    pn_idx = min(c._up_neighbs)
+            #    c._up_neighb_st = pn_idx
+            #    cncpts_map[pn_idx]._low_neighbs_st.add(cncpt_idx)
+            #    continue
+
+            #pn_idx = cncpt_idx-1
+            #while pn_idx >= 0:
+            #    if c.is_subconcept_of(cncpts_map[pn_idx]):
+            #        c._up_neighb_st = pn_idx
+            #        cncpts_map[pn_idx]._low_neighbs_st.add(cncpt_idx)
+
+            #        break
+
+            #    pn_idx -= 1
+            #else:
+            #    c._up_neighb_st = None
+
+    def _construct_spanning_tree_old(self, use_tqdm=True):
+        n_concepts = len(self._concepts)
+        cncpts_map = {c.get_id(): c for c in self._concepts}
+
+        for cncpt_idx in tqdm(sorted(cncpts_map.keys(), key=lambda idx: idx),
+                              disable=not use_tqdm, desc='construct spanning tree'):
+            c = cncpts_map[cncpt_idx]
+            c._low_neighbs_st = set()
+            if cncpt_idx == 0:
+                c._up_neighb_st = None
+                continue
+
             if c._up_neighbs is not None and len(c._up_neighbs)>0:
                 pn_idx = min(c._up_neighbs)
                 c._up_neighb_st = pn_idx
