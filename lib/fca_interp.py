@@ -16,7 +16,7 @@ from joblib import Parallel, delayed
 
 from .formal_context import Concept, BinaryContext, Binarizer
 from .pattern_structure import PatternStructure, MultiValuedContext
-from .utils_ import get_not_none
+from .utils_ import get_not_none, sparse_unique_columns
 
 
 
@@ -620,7 +620,37 @@ class FormalManager:
         rf.fit(X, y)
         preds_rf = rf.predict(X)
         #ds['preds_rf'] = rf.predict(X)
-        exts_by_estim = Parallel(-1)(delayed(self._parse_tree_to_extents)(est, X, cntx._objs_full) for est in rf.estimators_)
+        exts = self._parse_tree_to_extents(rf, X, cntx._objs_full)
+
+        concepts = []
+        for ext in exts:
+            concept_class = Concept if type(cntx) == BinaryContext else PatternStructure
+            c = concept_class(ext, cntx.get_intent(ext))
+            concepts.append(c)
+        return concepts
+
+    def _random_forest_concepts_old(self,  y_type='True', rf_params={}, rf_class=None):
+        cntx = self._context
+        #X = cntx.get_data().copy()
+        X = cntx._data.copy()
+        if type(cntx) == MultiValuedContext:
+            for f_idx in cntx._cat_attrs_idxs:
+                le = LabelEncoder()
+                X[:, f_idx] = le.fit_transform(X[:, f_idx])
+
+        y = cntx._y_true if y_type == 'True' else cntx._y_pred
+
+        if rf_class is None:
+            if len(set(y)) == 2:
+                rf_class = RandomForestClassifier
+            else:
+                rf_class = RandomForestRegressor
+
+        rf = rf_class(**rf_params)
+        rf.fit(X, y)
+        preds_rf = rf.predict(X)
+        #ds['preds_rf'] = rf.predict(X)
+        exts_by_estim = Parallel(-1)(delayed(self._parse_tree_to_extents_old)(est, X, cntx._objs_full) for est in rf.estimators_)
         exts = set()
         for exts_be in exts_by_estim:
             exts |= set(exts_be)
@@ -638,8 +668,24 @@ class FormalManager:
             concepts.append(c)
         return concepts
 
+
+
     @staticmethod
     def _parse_tree_to_extents(tree, X, objs, n_jobs=-1):
+        if isinstance(tree, (RandomForestClassifier, RandomForestRegressor)):
+            paths = tree.decision_path(X)[0].tocsc()
+        else:
+            paths = tree.decision_path(X).tocsc()
+
+        paths = sparse_unique_columns(paths)[0]
+        #f = lambda i, paths: tuple(objs[(paths[:, i] == 1).todense().flatten().tolist()[0]])
+        f = lambda i, paths: tuple(objs[paths.indices[paths.indptr[i]:paths.indptr[i+1]]])
+
+        exts = Parallel(n_jobs)([delayed(f)(i, paths) for i in range(paths.shape[1])])
+        return exts
+
+    @staticmethod
+    def _parse_tree_to_extents_old(tree, X, objs, n_jobs=-1):
         paths = tree.decision_path(X).tocsc()
         f = lambda i, paths: tuple(objs[(paths[:, i] == 1).todense().flatten().tolist()[0]])
 
