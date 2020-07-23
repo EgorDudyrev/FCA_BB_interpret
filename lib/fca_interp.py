@@ -21,7 +21,8 @@ from .utils_ import get_not_none, sparse_unique_columns
 
 
 class FormalManager:
-    def __init__(self, context, ds_obj=None, target_attr=None, cat_feats=None, task_type=None, context_full=None):
+    def __init__(self, context, ds_obj=None, target_attr=None, cat_feats=None, task_type=None, context_full=None,
+                 n_jobs=1):
         self._context = context
         if ds_obj is not None:
             ds_obj.index = ds_obj.index.astype(str)
@@ -32,6 +33,7 @@ class FormalManager:
         self._cat_feats = cat_feats
         self._task_type = task_type
         self._context_full = context_full
+        self._n_jobs = n_jobs
 
     def get_context(self):
         return self._context
@@ -163,14 +165,18 @@ class FormalManager:
                                      extent_short=ext_short, intent_short=int_short,
                                      is_monotonic=is_monotonic))
             else:
-                int_ = self._context.get_intent(ext_short, verb=True, trust_mode=False)
-                ext_ = self._context.get_extent(int_short, verb=True, trust_mode=False)
+                #int_ = self._context.get_intent(ext_short, verb=True, trust_mode=False)
+                #ext_ = self._context.get_extent(int_short, verb=True, trust_mode=False)
+                ext_ = ext_short
+                int_ = int_short
                 metrics = self._calc_metrics_inconcept(ext_) if len(ext_) > 0 and calc_metrics else None
-                new_concepts.add(PatternStructure(ext_, int_, idx=idx,
-                                    metrics=metrics,
-                                    is_monotonic=is_monotonic,
-                                    cat_feats=self._cat_feats))
-        concepts = new_concepts
+                c._metrics = metrics
+                c._idx = idx
+                #new_concepts.add(PatternStructure(ext_, int_, idx=idx,
+                #                    metrics=metrics,
+                #                    is_monotonic=is_monotonic,
+                #                    cat_feats=self._cat_feats))
+        #concepts = new_concepts
         self._concepts = concepts
 
         self._top_concept = self.get_concept_by_id(0)
@@ -214,10 +220,18 @@ class FormalManager:
         from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score, \
             r2_score, mean_absolute_error, mean_squared_error
 
+        ms = {}
+
         y_true = self._context.get_y_true(ext_)
+        if y_true is not None:
+            ms['mean_y_true'] = np.mean(y_true)
+
         y_pred = self._context.get_y_pred(ext_)
+        if y_pred is not None:
+            ms['mean_y_pred'] = np.mean(y_pred)
+
         if y_true is None or y_pred is None:
-            return None
+            return ms
         if self._task_type == 'regression':
             ms = {
                 'r2': r2_score(y_true, y_pred),
@@ -240,8 +254,6 @@ class FormalManager:
             raise ValueError(
                 f"Given task type {self._task_type} is not supported. Possible values are 'regression',"
                 f"'binary classification'")
-        ms['y_pred_mean'] = np.mean(y_pred)
-        ms['y_true_mean'] = np.mean(y_true)
         return ms
 
     def _close_by_one(self, max_iters_num, max_num_attrs, min_num_objs, use_tqdm, is_monotonic=False,
@@ -620,7 +632,7 @@ class FormalManager:
         rf.fit(X, y)
         preds_rf = rf.predict(X)
         #ds['preds_rf'] = rf.predict(X)
-        exts = self._parse_tree_to_extents(rf, X, cntx._objs_full)
+        exts = self._parse_tree_to_extents(rf, X, cntx._objs_full, self._n_jobs)
 
         concepts = []
         for ext in exts:
@@ -679,9 +691,13 @@ class FormalManager:
 
         paths = sparse_unique_columns(paths)[0]
         #f = lambda i, paths: tuple(objs[(paths[:, i] == 1).todense().flatten().tolist()[0]])
-        f = lambda i, paths: tuple(objs[paths.indices[paths.indptr[i]:paths.indptr[i+1]]])
+        #f = lambda i, paths: tuple(objs[paths.indices[paths.indptr[i]:paths.indptr[i+1]]])
+        f = lambda i, paths: paths.indices[paths.indptr[i]:paths.indptr[i + 1]]
 
-        exts = Parallel(n_jobs)([delayed(f)(i, paths) for i in range(paths.shape[1])])
+        if n_jobs == 1:
+            exts = [f(i, paths) for i in range(paths.shape[1])]
+        else:
+            exts = Parallel(n_jobs)([delayed(f)(i, paths) for i in range(paths.shape[1])])
         return exts
 
     @staticmethod
