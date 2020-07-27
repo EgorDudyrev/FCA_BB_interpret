@@ -1219,7 +1219,7 @@ class FormalManager:
 
         return c
 
-    def predict_context(self, cntx, metric='mean_y_true',):
+    def predict_context(self, cntx, metric='mean_y_true'):
         cncpts_exts = {}
         def get_extent(c):
             if c.get_id() not in cncpts_exts:
