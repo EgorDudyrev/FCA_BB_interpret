@@ -1219,7 +1219,7 @@ class FormalManager:
 
         return c
 
-    def predict_context(self, cntx, metric='mean_y_true'):
+    def predict_context(self, cntx, metric='mean_y_true', use_weight=False):
         cncpts_exts = {}
         def get_extent(c):
             if c.get_id() not in cncpts_exts:
@@ -1250,10 +1250,11 @@ class FormalManager:
                 ln = cncpts_dict[ln_id]
                 ext_ln |= get_extent(ln)
             ext_to_stop = ext-ext_ln
-            preds = [c._metrics[m] for m in metric]
+            preds = np.array([c._metrics[m] for m in metric])
+            cnt = len(c.get_extent()) if use_weight else 1
             #objs_preds_sum[[objs_dict[g] for g in ext_to_stop]] += preds
-            objs_preds_sum[list(ext_to_stop)] += preds
-            objs_preds_cnt += 1
+            objs_preds_sum[list(ext_to_stop)] += preds * cnt
+            objs_preds_cnt += cnt
             #for g in ext_to_stop:
             #    g_id = objs_dict[g]
             #    objs_preds[g_id].append(c._metrics[metric])
