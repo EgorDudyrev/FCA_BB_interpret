@@ -753,9 +753,11 @@ class FormalManager:
                 c._level = max([self.get_concept_by_id(un_id)._level for un_id in c.get_upper_neighbs()]) + 1
 
     def construct_lattice(self, use_tqdm=False, only_spanning_tree=False):
-        if not only_spanning_tree:
-            self._construct_lattice_connections(use_tqdm)
+        #if not only_spanning_tree:
+        #    self._construct_lattice_connections(use_tqdm)
         self._construct_spanning_tree(use_tqdm)
+        if not only_spanning_tree:
+            self._construct_lattice_from_spanning_tree(use_tqdm)
         self._calc_concept_levels()
         self._find_new_concept_objatr()
 
@@ -1311,3 +1313,65 @@ class FormalManager:
                 for k in new_int.keys():
                     diffs[k] = diffs.get(k, []) + [metr_diff / len(new_int)]
         return diffs
+
+    def _get_chains(self):
+        chains = []
+        visited_concepts = set()
+
+        while len(visited_concepts) < len(self.get_concepts()):
+            c_id = max([max(ch) for ch in chains]) if len(chains) > 0 else len(self.get_concepts()) - 1
+            while c_id in visited_concepts:
+                c_id -= 1
+
+            chain = set()
+            while True:
+                chain.add(c_id)
+                visited_concepts.add(c_id)
+                if c_id == 0:
+                    break
+                c_id = self.get_concept_by_id(c_id)._up_neighb_st
+            chains.append(chain)
+        return chains
+
+    def _construct_lattice_from_spanning_tree(self, use_tqdm=False):
+        chains = self._get_chains()
+        cncpts_dict = {c.get_id(): c for c in self.get_concepts()}
+
+        def quick_search(ar, c):
+            idx_min, idx_max = 0, len(ar) - 1
+            while idx_max != idx_min:
+                idx = (idx_min + idx_max) // 2
+                up = cncpts_dict[ar[idx]]
+                is_subconcept = c.is_subconcept_of(up)
+                if is_subconcept:
+                    idx_min = idx + 1
+                else:
+                    idx_max = idx
+            return idx_min
+
+        for c in tqdm(self.get_concepts(), disable=not use_tqdm):
+            c_id = c.get_id()
+            if c._low_neighbs is None:
+                c._low_neighbs = set()
+            if c_id == 0:
+                c._up_neighbs = None
+                continue
+
+            ups_chains = list(set([tuple(sorted([x for x in ch if x <= c_id])) for ch in chains]))
+
+            trans_neighbs = set()
+            for ups in sorted(ups_chains, key=lambda ch: c_id not in ch):
+                idx = quick_search(ups, c) if c_id not in ups else len(ups) - 2
+                while not c.is_subconcept_of(cncpts_dict[ups[idx]]):
+                    idx -= 1
+                up_id = ups[idx]
+                if up_id not in trans_neighbs:
+                    c._up_neighbs = get_not_none(c._up_neighbs, set()) | set([up_id])
+                    cncpts_dict[up_id]._low_neighbs = get_not_none(cncpts_dict[up_id]._low_neighbs, set()) | set(
+                        [c_id])
+                trans_neighbs |= set(ups[:idx])
+
+            for up_id in list(c._up_neighbs):
+                if up_id in trans_neighbs:
+                    c._up_neighbs -= set([up_id])
+                    cncpts_dict[up_id]._low_neighbs -= set([c_id])
