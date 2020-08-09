@@ -617,8 +617,12 @@ class FormalManager:
         X = cntx._data.copy()
         if type(cntx) == MultiValuedContext:
             for f_idx in cntx._cat_attrs_idxs:
-                le = LabelEncoder()
-                X[:, f_idx] = le.fit_transform(X[:, f_idx])
+                for v in np.unique(X[:, f_idx]):
+                    X = np.hstack((X, (X[:,f_idx]==v).reshape(-1,1)))
+
+                #le = LabelEncoder()
+                #X[:, f_idx] = le.fit_transform(X[:, f_idx])
+        X = X[:,[idx for idx in range(X.shape[1]) if idx not in cntx._cat_attrs_idxs]]
 
         y = cntx._y_true if y_type == 'True' else cntx._y_pred
 
