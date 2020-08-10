@@ -66,8 +66,13 @@ class FormalManager:
                            is_monotonic=False, strongness_lower_bound=None, calc_metrics=True,
                            strong_concepts=None, n_bootstrap_epochs=500, sample_size_bootstrap=15,
                            n_best_bootstrap_concepts=None, agglomerative_strongness_delta=0.1,
-                           stab_min_bound_bootstrap=None, y_type='True', rf_params={}, rf_class=None):
-        if algo == 'RandomForest':
+                           stab_min_bound_bootstrap=None, y_type='True', rf_params={}, rf_class=None,
+                           n_layers=2):
+        if algo == 'GradientForest':
+            concepts =  self._gradient_forest_concepts(
+                y_type=y_type, rf_params=rf_params, n_layers=n_layers, rf_class=None,)
+            concepts = set(concepts)
+        elif algo == 'RandomForest':
             concepts = self._random_forest_concepts(y_type=y_type, rf_params=rf_params, rf_class=rf_class)
             concepts = set(concepts)
         elif algo == 'FromMaxConcepts_Bootstrap':
@@ -684,7 +689,51 @@ class FormalManager:
             concepts.append(c)
         return concepts
 
+    def _gradient_forest_concepts(self,  y_type='True', rf_params={}, n_layers=2, rf_class=None,):
+        cntx = self._context
+        #X = cntx.get_data().copy()
+        X = cntx._data.copy()
+        if type(cntx) == MultiValuedContext:
+            for f_idx in cntx._cat_attrs_idxs:
+                for v in np.unique(X[:, f_idx]):
+                    X = np.hstack((X, (X[:,f_idx]==v).reshape(-1,1)))
 
+                #le = LabelEncoder()
+                #X[:, f_idx] = le.fit_transform(X[:, f_idx])
+        X = X[:, [idx for idx in range(X.shape[1]) if idx not in cntx._cat_attrs_idxs]]
+
+        y = cntx._y_true if y_type == 'True' else cntx._y_pred
+
+        rf_class = RandomForestRegressor
+        concept_class = Concept if type(cntx) == BinaryContext else PatternStructure
+
+        paths_all, exts_all, concepts_all, trees = None, set([]), [], []
+        for n_iter in tqdm(range(n_layers), disable=True):
+            np.random.seed(0)  # n_iter)
+            y_diff = y - preds_train.flatten() if n_iter>0 else y
+
+            tree = RandomForestRegressor(**rf_params)
+            tree.fit(X, y_diff)
+            trees.append(tree)
+
+            exts = [tuple(ext) for ext in self._parse_tree_to_extents(tree, X, cntx.get_objs())]
+            exts = [ext for ext in exts if ext not in exts_all]
+            exts_all |= set(exts)
+
+            concepts = []
+            for ext in tqdm(exts, leave=False, disable=True):
+                #c = concept_class(cntx.get_objs()[list(ext)], cntx.get_intent(ext),
+                c = concept_class(list(ext), cntx.get_intent(ext),
+                                          metrics=self._calc_metrics_inconcept(list(ext)))
+                concepts.append(c)
+            concepts_all += concepts
+            if n_iter < n_layers-1:
+                for idx, c in enumerate(self.sort_concepts(concepts_all)):
+                    c._idx = idx
+                self._concepts = concepts_all
+                self.construct_lattice(only_spanning_tree=True)
+                preds_train = self.predict_context(cntx)
+        return concepts_all
 
     @staticmethod
     def _parse_tree_to_extents(tree, X, objs, n_jobs=-1):
