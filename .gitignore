@@ -1,5 +1,7 @@
 datasets/*
 */.ipynb_checkpoints/*
+.ipynb_checkpoints/*
 */catboost_info/*
 */__pycache__/*
 *.idea/
+results/*

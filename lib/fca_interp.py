@@ -12,15 +12,17 @@ import json
 from copy import deepcopy, copy
 from sklearn.preprocessing import LabelEncoder
 from sklearn.ensemble import RandomForestRegressor, RandomForestClassifier
+from joblib import Parallel, delayed
 
 from .formal_context import Concept, BinaryContext, Binarizer
 from .pattern_structure import PatternStructure, MultiValuedContext
-from .utils_ import get_not_none
+from .utils_ import get_not_none, sparse_unique_columns
 
 
 
 class FormalManager:
-    def __init__(self, context, ds_obj=None, target_attr=None, cat_feats=None, task_type=None, context_full=None):
+    def __init__(self, context, ds_obj=None, target_attr=None, cat_feats=None, task_type=None, context_full=None,
+                 n_jobs=1):
         self._context = context
         if ds_obj is not None:
             ds_obj.index = ds_obj.index.astype(str)
@@ -31,6 +33,7 @@ class FormalManager:
         self._cat_feats = cat_feats
         self._task_type = task_type
         self._context_full = context_full
+        self._n_jobs = n_jobs
 
     def get_context(self):
         return self._context
@@ -63,9 +66,14 @@ class FormalManager:
                            is_monotonic=False, strongness_lower_bound=None, calc_metrics=True,
                            strong_concepts=None, n_bootstrap_epochs=500, sample_size_bootstrap=15,
                            n_best_bootstrap_concepts=None, agglomerative_strongness_delta=0.1,
-                           stab_min_bound_bootstrap=None, y_type='True', rf_params={}):
-        if algo == 'RandomForest':
-            concepts = self._random_forest_concepts(y_type=y_type, rf_params=rf_params)
+                           stab_min_bound_bootstrap=None, y_type='True', rf_params={}, rf_class=None,
+                           n_layers=2):
+        if algo == 'GradientForest':
+            concepts =  self._gradient_forest_concepts(
+                y_type=y_type, rf_params=rf_params, n_layers=n_layers, rf_class=None,)
+            concepts = set(concepts)
+        elif algo == 'RandomForest':
+            concepts = self._random_forest_concepts(y_type=y_type, rf_params=rf_params, rf_class=rf_class)
             concepts = set(concepts)
         elif algo == 'FromMaxConcepts_Bootstrap':
             max_cncpts = self.construct_max_strong_hyps(verb=True)
@@ -162,14 +170,18 @@ class FormalManager:
                                      extent_short=ext_short, intent_short=int_short,
                                      is_monotonic=is_monotonic))
             else:
-                int_ = self._context.get_intent(ext_short, verb=True, trust_mode=False)
-                ext_ = self._context.get_extent(int_short, verb=True, trust_mode=False)
+                #int_ = self._context.get_intent(ext_short, verb=True, trust_mode=False)
+                #ext_ = self._context.get_extent(int_short, verb=True, trust_mode=False)
+                ext_ = ext_short
+                int_ = int_short
                 metrics = self._calc_metrics_inconcept(ext_) if len(ext_) > 0 and calc_metrics else None
-                new_concepts.add(PatternStructure(ext_, int_, idx=idx,
-                                    metrics=metrics,
-                                    is_monotonic=is_monotonic,
-                                    cat_feats=self._cat_feats))
-        concepts = new_concepts
+                c._metrics = metrics
+                c._idx = idx
+                #new_concepts.add(PatternStructure(ext_, int_, idx=idx,
+                #                    metrics=metrics,
+                #                    is_monotonic=is_monotonic,
+                #                    cat_feats=self._cat_feats))
+        #concepts = new_concepts
         self._concepts = concepts
 
         self._top_concept = self.get_concept_by_id(0)
@@ -213,10 +225,18 @@ class FormalManager:
         from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score, \
             r2_score, mean_absolute_error, mean_squared_error
 
+        ms = {}
+
         y_true = self._context.get_y_true(ext_)
+        if y_true is not None:
+            ms['mean_y_true'] = np.mean(y_true)
+
         y_pred = self._context.get_y_pred(ext_)
+        if y_pred is not None:
+            ms['mean_y_pred'] = np.mean(y_pred)
+
         if y_true is None or y_pred is None:
-            return None
+            return ms
         if self._task_type == 'regression':
             ms = {
                 'r2': r2_score(y_true, y_pred),
@@ -239,8 +259,6 @@ class FormalManager:
             raise ValueError(
                 f"Given task type {self._task_type} is not supported. Possible values are 'regression',"
                 f"'binary classification'")
-        ms['y_pred_mean'] = np.mean(y_pred)
-        ms['y_true_mean'] = np.mean(y_true)
         return ms
 
     def _close_by_one(self, max_iters_num, max_num_attrs, min_num_objs, use_tqdm, is_monotonic=False,
@@ -521,30 +539,109 @@ class FormalManager:
             for ln_idx in concept._low_neighbs:
                 cncpts_map[ln_idx]._up_neighbs.add(concept._idx)
 
-    def _random_forest_concepts(self,  y_type='True', rf_params={}):
+    def _construct_spanning_tree(self, use_tqdm=True):
+        n_concepts = len(self._concepts)
+        cncpts_map = {c.get_id(): c for c in self._concepts}
+
+        for cncpt_idx in tqdm(sorted(cncpts_map.keys(), key=lambda idx: idx),
+                              disable=not use_tqdm, desc='construct spanning tree'):
+            c = cncpts_map[cncpt_idx]
+            c._low_neighbs_st = set()
+            if cncpt_idx == 0:
+                c._up_neighb_st = None
+                continue
+
+            un_idx = 0
+            sifted = True
+            while sifted:
+                un = cncpts_map[un_idx]
+                for ln_idx in un._low_neighbs_st:
+                    ln = cncpts_map[ln_idx]
+                    if c.is_subconcept_of(ln):
+                        un_idx = ln_idx
+                        sifted = True
+                        break
+                else:
+                    sifted = False
+            un._low_neighbs_st.add(cncpt_idx)
+            c._up_neighb_st = un_idx
+
+
+            #if c._up_neighbs is not None and len(c._up_neighbs)>0:
+            #    pn_idx = min(c._up_neighbs)
+            #    c._up_neighb_st = pn_idx
+            #    cncpts_map[pn_idx]._low_neighbs_st.add(cncpt_idx)
+            #    continue
+
+            #pn_idx = cncpt_idx-1
+            #while pn_idx >= 0:
+            #    if c.is_subconcept_of(cncpts_map[pn_idx]):
+            #        c._up_neighb_st = pn_idx
+            #        cncpts_map[pn_idx]._low_neighbs_st.add(cncpt_idx)
+
+            #        break
+
+            #    pn_idx -= 1
+            #else:
+            #    c._up_neighb_st = None
+
+    def _construct_spanning_tree_old(self, use_tqdm=True):
+        n_concepts = len(self._concepts)
+        cncpts_map = {c.get_id(): c for c in self._concepts}
+
+        for cncpt_idx in tqdm(sorted(cncpts_map.keys(), key=lambda idx: idx),
+                              disable=not use_tqdm, desc='construct spanning tree'):
+            c = cncpts_map[cncpt_idx]
+            c._low_neighbs_st = set()
+            if cncpt_idx == 0:
+                c._up_neighb_st = None
+                continue
+
+            if c._up_neighbs is not None and len(c._up_neighbs)>0:
+                pn_idx = min(c._up_neighbs)
+                c._up_neighb_st = pn_idx
+                cncpts_map[pn_idx]._low_neighbs_st.add(cncpt_idx)
+                continue
+
+            pn_idx = cncpt_idx-1
+            while pn_idx >= 0:
+                if c.is_subconcept_of(cncpts_map[pn_idx]):
+                    c._up_neighb_st = pn_idx
+                    cncpts_map[pn_idx]._low_neighbs_st.add(cncpt_idx)
+
+                    break
+
+                pn_idx -= 1
+            else:
+                c._up_neighb_st = None
+
+
+    def _random_forest_concepts(self,  y_type='True', rf_params={}, rf_class=None):
         cntx = self._context
-        X = cntx.get_data().copy()
+        #X = cntx.get_data().copy()
+        X = cntx._data.copy()
         if type(cntx) == MultiValuedContext:
             for f_idx in cntx._cat_attrs_idxs:
-                le = LabelEncoder()
-                X[:, f_idx] = le.fit_transform(X[:, f_idx])
+                for v in np.unique(X[:, f_idx]):
+                    X = np.hstack((X, (X[:,f_idx]==v).reshape(-1,1)))
+
+                #le = LabelEncoder()
+                #X[:, f_idx] = le.fit_transform(X[:, f_idx])
+        X = X[:,[idx for idx in range(X.shape[1]) if idx not in cntx._cat_attrs_idxs]]
 
         y = cntx._y_true if y_type == 'True' else cntx._y_pred
 
-        if len(set(y)) == 2:
-            rf_class = RandomForestClassifier
-        else:
-            rf_class = RandomForestRegressor
+        if rf_class is None:
+            if len(set(y)) == 2:
+                rf_class = RandomForestClassifier
+            else:
+                rf_class = RandomForestRegressor
 
         rf = rf_class(**rf_params)
         rf.fit(X, y)
         preds_rf = rf.predict(X)
         #ds['preds_rf'] = rf.predict(X)
-        exts = list(set([
-            tuple(sorted(ext)) for est in rf.estimators_
-            for ext in self._parse_tree_to_extents(est, X, cntx._objs_full)]
-        ))
-        exts = list(set([tuple(cntx.get_extent(cntx.get_intent(ext))) for ext in exts]))
+        exts = self._parse_tree_to_extents(rf, X, cntx._objs_full, self._n_jobs)
 
         concepts = []
         for ext in exts:
@@ -553,10 +650,115 @@ class FormalManager:
             concepts.append(c)
         return concepts
 
+    def _random_forest_concepts_old(self,  y_type='True', rf_params={}, rf_class=None):
+        cntx = self._context
+        #X = cntx.get_data().copy()
+        X = cntx._data.copy()
+        if type(cntx) == MultiValuedContext:
+            for f_idx in cntx._cat_attrs_idxs:
+                le = LabelEncoder()
+                X[:, f_idx] = le.fit_transform(X[:, f_idx])
+
+        y = cntx._y_true if y_type == 'True' else cntx._y_pred
+
+        if rf_class is None:
+            if len(set(y)) == 2:
+                rf_class = RandomForestClassifier
+            else:
+                rf_class = RandomForestRegressor
+
+        rf = rf_class(**rf_params)
+        rf.fit(X, y)
+        preds_rf = rf.predict(X)
+        #ds['preds_rf'] = rf.predict(X)
+        exts_by_estim = Parallel(-1)(delayed(self._parse_tree_to_extents_old)(est, X, cntx._objs_full) for est in rf.estimators_)
+        exts = set()
+        for exts_be in exts_by_estim:
+            exts |= set(exts_be)
+        exts = list(exts)
+        #exts = list(set([
+        #    tuple(sorted(ext)) for est in rf.estimators_
+        #    for ext in self._parse_tree_to_extents(est, X, cntx._objs_full)]
+        #))
+        #exts = list(set([tuple(cntx.get_extent(cntx.get_intent(ext))) for ext in exts]))
+
+        concepts = []
+        for ext in exts:
+            concept_class = Concept if type(cntx) == BinaryContext else PatternStructure
+            c = concept_class(ext, cntx.get_intent(ext))
+            concepts.append(c)
+        return concepts
+
+    def _gradient_forest_concepts(self,  y_type='True', rf_params={}, n_layers=2, rf_class=None,):
+        cntx = self._context
+        #X = cntx.get_data().copy()
+        X = cntx._data.copy()
+        if type(cntx) == MultiValuedContext:
+            for f_idx in cntx._cat_attrs_idxs:
+                for v in np.unique(X[:, f_idx]):
+                    X = np.hstack((X, (X[:,f_idx]==v).reshape(-1,1)))
+
+                #le = LabelEncoder()
+                #X[:, f_idx] = le.fit_transform(X[:, f_idx])
+        X = X[:, [idx for idx in range(X.shape[1]) if idx not in cntx._cat_attrs_idxs]]
+
+        y = cntx._y_true if y_type == 'True' else cntx._y_pred
+
+        rf_class = RandomForestRegressor
+        concept_class = Concept if type(cntx) == BinaryContext else PatternStructure
+
+        paths_all, exts_all, concepts_all, trees = None, set([]), [], []
+        for n_iter in tqdm(range(n_layers), disable=True):
+            np.random.seed(0)  # n_iter)
+            y_diff = y - preds_train.flatten() if n_iter>0 else y
+
+            tree = RandomForestRegressor(**rf_params)
+            tree.fit(X, y_diff)
+            trees.append(tree)
+
+            exts = [tuple(ext) for ext in self._parse_tree_to_extents(tree, X, cntx.get_objs())]
+            exts = [ext for ext in exts if ext not in exts_all]
+            exts_all |= set(exts)
+
+            concepts = []
+            for ext in tqdm(exts, leave=False, disable=True):
+                #c = concept_class(cntx.get_objs()[list(ext)], cntx.get_intent(ext),
+                c = concept_class(list(ext), cntx.get_intent(ext),
+                                          metrics=self._calc_metrics_inconcept(list(ext)))
+                concepts.append(c)
+            concepts_all += concepts
+            if n_iter < n_layers-1:
+                for idx, c in enumerate(self.sort_concepts(concepts_all)):
+                    c._idx = idx
+                self._concepts = concepts_all
+                self.construct_lattice(only_spanning_tree=True)
+                preds_train = self.predict_context(cntx)
+        return concepts_all
+
     @staticmethod
-    def _parse_tree_to_extents(tree, X, objs):
-        paths = tree.decision_path(X)
-        exts = [list(objs[(paths[:, i] == 1).todense().flatten().tolist()[0]]) for i in range(paths.shape[1])]
+    def _parse_tree_to_extents(tree, X, objs, n_jobs=-1):
+        if isinstance(tree, (RandomForestClassifier, RandomForestRegressor)):
+            paths = tree.decision_path(X)[0].tocsc()
+        else:
+            paths = tree.decision_path(X).tocsc()
+
+        paths = sparse_unique_columns(paths)[0]
+        #f = lambda i, paths: tuple(objs[(paths[:, i] == 1).todense().flatten().tolist()[0]])
+        #f = lambda i, paths: tuple(objs[paths.indices[paths.indptr[i]:paths.indptr[i+1]]])
+        f = lambda i, paths: paths.indices[paths.indptr[i]:paths.indptr[i + 1]]
+
+        if n_jobs == 1:
+            exts = [f(i, paths) for i in range(paths.shape[1])]
+        else:
+            exts = Parallel(n_jobs)([delayed(f)(i, paths) for i in range(paths.shape[1])])
+        return exts
+
+    @staticmethod
+    def _parse_tree_to_extents_old(tree, X, objs, n_jobs=-1):
+        paths = tree.decision_path(X).tocsc()
+        f = lambda i, paths: tuple(objs[(paths[:, i] == 1).todense().flatten().tolist()[0]])
+
+        exts = Parallel(n_jobs)([delayed(f)(i, paths) for i in range(paths.shape[1])])
         return exts
 
     def _find_new_concept_objatr(self):
@@ -603,8 +805,12 @@ class FormalManager:
             else:
                 c._level = max([self.get_concept_by_id(un_id)._level for un_id in c.get_upper_neighbs()]) + 1
 
-    def construct_lattice(self, use_tqdm=False):
-        self._construct_lattice_connections(use_tqdm)
+    def construct_lattice(self, use_tqdm=False, only_spanning_tree=False):
+        #if not only_spanning_tree:
+        #    self._construct_lattice_connections(use_tqdm)
+        self._construct_spanning_tree(use_tqdm)
+        if not only_spanning_tree:
+            self._construct_lattice_from_spanning_tree(use_tqdm)
         self._calc_concept_levels()
         self._find_new_concept_objatr()
 
@@ -1068,50 +1274,61 @@ class FormalManager:
 
         return c
 
-    def predict_context(self, cntx, metric='mean_y_true', aggfunc='mean'):
-        obj_concepts = {}
-        for c in self.get_concepts():
-            ext_ = cntx.get_extent(c.get_intent())
-            for g in ext_:
-                obj_concepts[g] = obj_concepts.get(g, []) + [c.get_id()]
+    def predict_context(self, cntx, metric='mean_y_true', use_weight=False):
+        cncpts_exts = {}
+        def get_extent(c):
+            if c.get_id() not in cncpts_exts:
+                cncpts_exts[c.get_id()] = set(cntx.get_extent(c.get_intent(), verb=False))
+            return cncpts_exts[c.get_id()]
 
-        obj_preds = {}
-        for g, cncpts_ids in obj_concepts.items():
-            cncpts_ids = sorted(cncpts_ids, key=lambda x: -x)
-            for i in range(len(cncpts_ids)):
-                if i >= len(cncpts_ids):
-                    break
+        metric = metric if type(metric) == list else [metric]
 
-                c_id = cncpts_ids[i]
-                c = self.get_concept_by_id(c_id)
-                cncpts_ids = [c_id1 for c_id1 in cncpts_ids \
-                              if c_id1 == c_id or not c.is_subconcept_of(self.get_concept_by_id(c_id1))]
+        cncpts_to_check = set([0])
+        cncpts_dict = {c.get_id(): c for c in self.get_concepts()}
+        objs_dict = {g: idx for idx, g in enumerate(cntx.get_objs())}
+        objs_preds = [[] for g in cntx.get_objs()]
+        objs_preds_sum = np.zeros((len(cntx.get_objs()), len(metric)))
+        objs_preds_cnt = np.zeros(len(cntx.get_objs()))
 
-#            cncpts_ids = [c_id for c_id in cncpts_ids if not any(
-#                [self.get_concept_by_id(c_id1).is_subconcept_of(self.get_concept_by_id(c_id)) for c_id1 in cncpts_ids if
-#                 c_id1 != c_id])]
-            if type(metric) == list:
-                preds = np.array([[self.get_concept_by_id(c_id)._metrics[m] for m in metric] for c_id in cncpts_ids])
-                preds = preds.mean(0)
-            else:
-                preds = [self.get_concept_by_id(c_id)._metrics[metric] for c_id in cncpts_ids]
+        for i in range(len(self.get_concepts())):
+            if len(cncpts_to_check) == 0:
+                break
 
-                if aggfunc == 'mean':
-                    preds = np.mean(preds)
-                elif aggfunc =='median':
-                    preds = np.median(preds)
-                elif aggfunc == 'mode':
-                    preds = pd.Series(preds).value_counts().sort_values(ascending=False).index[0]# statistics.mode(preds)
-                else:
-                    raise ValueError(f'Given aggfunc "{aggfunc}" is unknown')
-            obj_preds[g] = preds
+            c_id = min(cncpts_to_check)
+            cncpts_to_check.remove(c_id)
 
-        return [obj_preds.get(g) for g in cntx.get_objs()]
+            c = cncpts_dict[c_id]
+            ext = get_extent(c)
+
+            ext_ln = set()
+            for ln_id in c._low_neighbs_st: #c.get_lower_neighbs():
+                ln = cncpts_dict[ln_id]
+                ext_ln |= get_extent(ln)
+            ext_to_stop = ext-ext_ln
+            preds = np.array([c._metrics[m] for m in metric])
+            cnt = len(c.get_extent()) if use_weight else 1
+            #objs_preds_sum[[objs_dict[g] for g in ext_to_stop]] += preds
+            objs_preds_sum[list(ext_to_stop)] += preds * cnt
+            objs_preds_cnt += cnt
+            #for g in ext_to_stop:
+            #    g_id = objs_dict[g]
+            #    objs_preds[g_id].append(c._metrics[metric])
+
+            cncpts_to_check |= set([ln_id for ln_id in c._low_neighbs_st #c.get_lower_neighbs()
+                                    if len(get_extent(cncpts_dict[ln_id]))>0 ] )
+
+        #final_preds = []
+        #for preds in objs_preds:
+        #    final_preds.append(np.mean(preds))
+        final_preds = (objs_preds_sum.T/objs_preds_cnt).T
+
+        return final_preds
 
     def set_concepts(self, concepts):
         concepts = deepcopy(concepts)
+        objs = set(self.get_context().get_objs())
         for c in concepts:
-            ext_ = [g for g in c.get_extent() if g in self.get_context().get_objs()]
+            ext_ = [g for g in c.get_extent() if g in objs]
             int_ = self.get_context().get_intent(ext_)
             ext_ = self.get_context().get_extent(int_)
 
@@ -1149,3 +1366,65 @@ class FormalManager:
                 for k in new_int.keys():
                     diffs[k] = diffs.get(k, []) + [metr_diff / len(new_int)]
         return diffs
+
+    def _get_chains(self):
+        chains = []
+        visited_concepts = set()
+
+        while len(visited_concepts) < len(self.get_concepts()):
+            c_id = max([max(ch) for ch in chains]) if len(chains) > 0 else len(self.get_concepts()) - 1
+            while c_id in visited_concepts:
+                c_id -= 1
+
+            chain = set()
+            while True:
+                chain.add(c_id)
+                visited_concepts.add(c_id)
+                if c_id == 0:
+                    break
+                c_id = self.get_concept_by_id(c_id)._up_neighb_st
+            chains.append(chain)
+        return chains
+
+    def _construct_lattice_from_spanning_tree(self, use_tqdm=False):
+        chains = self._get_chains()
+        cncpts_dict = {c.get_id(): c for c in self.get_concepts()}
+
+        def quick_search(ar, c):
+            idx_min, idx_max = 0, len(ar) - 1
+            while idx_max != idx_min:
+                idx = (idx_min + idx_max) // 2
+                up = cncpts_dict[ar[idx]]
+                is_subconcept = c.is_subconcept_of(up)
+                if is_subconcept:
+                    idx_min = idx + 1
+                else:
+                    idx_max = idx
+            return idx_min
+
+        for c in tqdm(self.get_concepts(), disable=not use_tqdm):
+            c_id = c.get_id()
+            if c._low_neighbs is None:
+                c._low_neighbs = set()
+            if c_id == 0:
+                c._up_neighbs = None
+                continue
+
+            ups_chains = list(set([tuple(sorted([x for x in ch if x <= c_id])) for ch in chains]))
+
+            trans_neighbs = set()
+            for ups in sorted(ups_chains, key=lambda ch: c_id not in ch):
+                idx = quick_search(ups, c) if c_id not in ups else len(ups) - 2
+                while not c.is_subconcept_of(cncpts_dict[ups[idx]]):
+                    idx -= 1
+                up_id = ups[idx]
+                if up_id not in trans_neighbs:
+                    c._up_neighbs = get_not_none(c._up_neighbs, set()) | set([up_id])
+                    cncpts_dict[up_id]._low_neighbs = get_not_none(cncpts_dict[up_id]._low_neighbs, set()) | set(
+                        [c_id])
+                trans_neighbs |= set(ups[:idx])
+
+            for up_id in list(c._up_neighbs):
+                if up_id in trans_neighbs:
+                    c._up_neighbs -= set([up_id])
+                    cncpts_dict[up_id]._low_neighbs -= set([c_id])

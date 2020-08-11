@@ -10,6 +10,7 @@ class AbstractConcept:
         #self._extent = extent
         self._extent = list(extent)
         self._intent = intent
+        self._intent = intent
         self._extent_short = get_not_none(extent_short, self._extent)
         self._intent_short = get_not_none(intent_short, self._intent)
         self._idx = idx
@@ -164,7 +165,9 @@ class AbstractContext:
     def get_y_true(self, objs):
         if objs is None or len(objs) == 0 or self._y_true is None:
             return None
-        return self._y_true[np.isin(self._objs_full, objs)]
+        gids = self._get_ids_in_array(objs, self._objs_full, 'objects') if not isinstance(objs[0],(int, np.integer)) else objs
+        return self._y_true[gids]
+        #return self._y_true[np.isin(self._objs_full, objs)]
 
     def get_y_pred(self, objs):
         if objs is None or len(objs) == 0 or self._y_pred is None:
@@ -172,23 +175,23 @@ class AbstractContext:
         return self._y_pred[np.isin(self._objs_full, objs)]
 
     def _get_id_in_array(self, x, ar, ar_name):
-        if type(x) == int:
+        if isinstance(x, (int, np.integer)):
             idx = x
             if idx < 0 or idx > len(ar)-1:
                 raise ValueError(f"There are only {len(ar)} {ar_name} (Suggested ({idx}")
-        elif type(x) in [str, np.str_]:
+        elif isinstance(x, (str, np.str_)):
             x = np.str_(x)
             if x not in ar:
                 raise ValueError(f"No such {x} in {ar_name}")
             idx = np.argmax(ar == x)
         else:
-            raise TypeError(f"Possible values for {ar_name} are string and int type")
+            raise TypeError(f"Possible values for {ar_name} are string and int type. Got {type(x)}")
         return idx
 
     def _get_ids_in_array(self, xs, ar, ar_name):
         idxs = []
         error = []
-        xs = list(xs) if type(xs) == tuple else [xs] if type(xs) != list else xs
+        xs = xs if isinstance(xs, (tuple, list, np.ndarray)) else [xs]
         for x in xs:
             try:
                 idxs.append(self._get_id_in_array(x, ar, ar_name))
