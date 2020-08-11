@@ -622,11 +622,13 @@ class FormalManager:
         X = cntx._data.copy()
         if type(cntx) == MultiValuedContext:
             for f_idx in cntx._cat_attrs_idxs:
-                for v in np.unique(X[:, f_idx]):
-                    X = np.hstack((X, (X[:,f_idx]==v).reshape(-1,1)))
-
-                #le = LabelEncoder()
-                #X[:, f_idx] = le.fit_transform(X[:, f_idx])
+                if len(set(X[:,f_idx]))<=10:
+                    for v in np.unique(X[:, f_idx]):
+                        X = np.hstack((X, (X[:,f_idx]==v).reshape(-1,1)))
+                else:
+                    le = LabelEncoder()
+                    X = np.hstack((X, le.fit_transform(X[:,f_idx]).reshape(-1,1)))
+                    #X[:, f_idx] = le.fit_transform(X[:, f_idx])
         X = X[:,[idx for idx in range(X.shape[1]) if idx not in cntx._cat_attrs_idxs]]
 
         y = cntx._y_true if y_type == 'True' else cntx._y_pred
@@ -1370,9 +1372,12 @@ class FormalManager:
     def _get_chains(self):
         chains = []
         visited_concepts = set()
+        cncpts_dict = {c.get_id(): c for c in self.get_concepts()}
+        all_concepts = set(cncpts_dict.keys())
 
         while len(visited_concepts) < len(self.get_concepts()):
-            c_id = max([max(ch) for ch in chains]) if len(chains) > 0 else len(self.get_concepts()) - 1
+            c_id = max(all_concepts-visited_concepts)
+            #c_id = max([max(ch) for ch in chains]) if len(chains) > 0 else len(self.get_concepts()) - 1
             while c_id in visited_concepts:
                 c_id -= 1
 
@@ -1382,7 +1387,7 @@ class FormalManager:
                 visited_concepts.add(c_id)
                 if c_id == 0:
                     break
-                c_id = self.get_concept_by_id(c_id)._up_neighb_st
+                c_id = cncpts_dict[c_id]._up_neighb_st
             chains.append(chain)
         return chains
 
@@ -1390,6 +1395,7 @@ class FormalManager:
         chains = self._get_chains()
         cncpts_dict = {c.get_id(): c for c in self.get_concepts()}
 
+        
         def quick_search(ar, c):
             idx_min, idx_max = 0, len(ar) - 1
             while idx_max != idx_min:
@@ -1413,7 +1419,8 @@ class FormalManager:
             ups_chains = list(set([tuple(sorted([x for x in ch if x <= c_id])) for ch in chains]))
 
             trans_neighbs = set()
-            for ups in sorted(ups_chains, key=lambda ch: c_id not in ch):
+            for ups in sorted(ups_chains, key=lambda ch: (c_id not in ch, len(ch))):
+                ups = sorted(set([0])|(set(ups)-trans_neighbs))
                 idx = quick_search(ups, c) if c_id not in ups else len(ups) - 2
                 while not c.is_subconcept_of(cncpts_dict[ups[idx]]):
                     idx -= 1
