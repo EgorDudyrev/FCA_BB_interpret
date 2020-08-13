@@ -1388,43 +1388,38 @@ class FormalManager:
 
     def _construct_lattice_from_spanning_tree(self, use_tqdm=False):
         chains = self._get_chains()
+        chains = np.array([np.array(sorted(ch)).astype(int) for ch in chains])
         cncpts_dict = {c.get_id(): c for c in self.get_concepts()}
 
-        def quick_search(ar, c):
-            idx_min, idx_max = 0, len(ar) - 1
-            while idx_max != idx_min:
-                idx = (idx_min + idx_max) // 2
-                up = cncpts_dict[ar[idx]]
-                is_subconcept = c.is_subconcept_of(up)
-                if is_subconcept:
-                    idx_min = idx + 1
-                else:
-                    idx_max = idx
-            return idx_min
+        all_up_neighbs = {i: set() for i in range(len(cncpts_dict))}
+        not_up_neighbs = {i: set() for i in range(len(cncpts_dict))}
+        for ch_id_cur in tqdm(range(len(chains)), disable=not use_tqdm, desc='iterate through chains'):
+            c_ids_comp = np.zeros(len(chains), int)
+            for idx_cur, c_id_cur in enumerate(chains[ch_id_cur][1:]):
+                idx_cur += 1
+                c_cur = cncpts_dict[c_id_cur]
+                all_up_neighbs[c_id_cur] |= all_up_neighbs[c_cur._up_neighb_st]
 
-        for c in tqdm(self.get_concepts(), disable=not use_tqdm):
-            c_id = c.get_id()
-            if c._low_neighbs is None:
-                c._low_neighbs = set()
-            if c_id == 0:
-                c._up_neighbs = None
-                continue
+                for ch_id_comp in range(len(chains)):
+                    if ch_id_comp == ch_id_cur:
+                        continue
 
-            ups_chains = list(set([tuple(sorted([x for x in ch if x <= c_id])) for ch in chains]))
+                    chain_comp = chains[ch_id_comp]
+                    idx_comp_start = c_ids_comp[ch_id_comp]
+                    for idx_comp, c_id_comp in enumerate(chain_comp[idx_comp_start:]):
+                        idx_comp += idx_comp_start
+                        if c_id_comp in all_up_neighbs[c_id_cur]:
+                            continue
+                        if c_id_comp in not_up_neighbs:
+                            c_ids_comp[ch_id_comp] = idx_comp - 1
+                            break
 
-            trans_neighbs = set()
-            for ups in sorted(ups_chains, key=lambda ch: c_id not in ch):
-                idx = quick_search(ups, c) if c_id not in ups else len(ups) - 2
-                while not c.is_subconcept_of(cncpts_dict[ups[idx]]):
-                    idx -= 1
-                up_id = ups[idx]
-                if up_id not in trans_neighbs:
-                    c._up_neighbs = get_not_none(c._up_neighbs, set()) | set([up_id])
-                    cncpts_dict[up_id]._low_neighbs = get_not_none(cncpts_dict[up_id]._low_neighbs, set()) | set(
-                        [c_id])
-                trans_neighbs |= set(ups[:idx])
+                        c_comp = cncpts_dict[c_id_comp]
 
-            for up_id in list(c._up_neighbs):
-                if up_id in trans_neighbs:
-                    c._up_neighbs -= set([up_id])
-                    cncpts_dict[up_id]._low_neighbs -= set([c_id])
+                        if c_id_cur == c_id_comp or not c_cur.is_subconcept_of(c_comp):
+                            c_cur._up_neighbs |= {chain_comp[idx_comp - 1]}
+                            c_comp._low_neighbs |= {c_id_cur}
+                            c_ids_comp[ch_id_comp] = idx_comp - 1
+                            not_up_neighbs[c_id_cur].add(c_id_comp)
+                            break
+                        all_up_neighbs[c_id_cur].add(c_id_comp)
