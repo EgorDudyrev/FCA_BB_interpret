@@ -1415,15 +1415,15 @@ class FormalManager:
                         idx_comp += idx_comp_start
                         if c_id_comp in all_up_neighbs[c_id_cur]:
                             continue
-                        if c_id_comp in not_up_neighbs:
+                        if c_id_comp in not_up_neighbs[c_id_cur]:
                             c_ids_comp[ch_id_comp] = idx_comp - 1
                             break
 
                         c_comp = cncpts_dict[c_id_comp]
 
                         if c_id_cur == c_id_comp or not c_cur.is_subconcept_of(c_comp):
-                            c_cur._up_neighbs |= {chain_comp[idx_comp - 1]}
-                            c_comp._low_neighbs |= {c_id_cur}
+                            c_cur._up_neighbs = c_cur._up_neighbs|{chain_comp[idx_comp - 1]} if c_cur._up_neighbs is not None else {chain_comp[idx_comp - 1]}
+                            c_comp._low_neighbs = c_comp._low_neighbs|{c_id_cur} if c_comp._low_neighbs is not None else {c_id_cur}
                             c_ids_comp[ch_id_comp] = idx_comp - 1
                             not_up_neighbs[c_id_cur].add(c_id_comp)
                             break
