@@ -1276,21 +1276,18 @@ class FormalManager:
 
         return c
 
-    def predict_context(self, cntx, metric='mean_y_true', use_weight=False):
+    def trace_context(self, cntx):
         cncpts_exts = {}
         def get_extent(c):
             if c.get_id() not in cncpts_exts:
                 cncpts_exts[c.get_id()] = set(cntx.get_extent(c.get_intent(), verb=False))
             return cncpts_exts[c.get_id()]
 
-        metric = metric if type(metric) == list else [metric]
-
         cncpts_to_check = set([0])
         cncpts_dict = {c.get_id(): c for c in self.get_concepts()}
         objs_dict = {g: idx for idx, g in enumerate(cntx.get_objs())}
-        objs_preds = [[] for g in cntx.get_objs()]
-        objs_preds_sum = np.zeros((len(cntx.get_objs()), len(metric)))
-        objs_preds_cnt = np.zeros(len(cntx.get_objs()))
+        obj_preds_cncpts = {idx: [] for idx in range(len(cntx.get_objs()))}
+        obj_all_cncpts = {idx: [] for idx in range(len(cntx.get_objs()))}
 
         for i in range(len(self.get_concepts())):
             if len(cncpts_to_check) == 0:
@@ -1303,28 +1300,46 @@ class FormalManager:
             ext = get_extent(c)
 
             ext_ln = set()
-            for ln_id in c._low_neighbs_st: #c.get_lower_neighbs():
+            for ln_id in c._low_neighbs_st:
                 ln = cncpts_dict[ln_id]
                 ext_ln |= get_extent(ln)
-            ext_to_stop = ext-ext_ln
-            preds = np.array([c._metrics[m] for m in metric])
-            cnt = len(c.get_extent()) if use_weight else 1
-            #objs_preds_sum[[objs_dict[g] for g in ext_to_stop]] += preds
-            objs_preds_sum[list(ext_to_stop)] += preds * cnt
-            objs_preds_cnt += cnt
-            #for g in ext_to_stop:
-            #    g_id = objs_dict[g]
-            #    objs_preds[g_id].append(c._metrics[metric])
+            ext_to_stop = ext - ext_ln
 
-            cncpts_to_check |= set([ln_id for ln_id in c._low_neighbs_st #c.get_lower_neighbs()
-                                    if len(get_extent(cncpts_dict[ln_id]))>0 ] )
+            for g in ext_to_stop:
+                obj_preds_cncpts[g].append(c_id)
+            for g in ext:
+                obj_all_cncpts[g].append(c_id)
 
-        #final_preds = []
-        #for preds in objs_preds:
-        #    final_preds.append(np.mean(preds))
-        final_preds = (objs_preds_sum.T/objs_preds_cnt).T
+            cncpts_to_check |= set([ln_id for ln_id in c._low_neighbs_st  # c.get_lower_neighbs()
+                                    if len(get_extent(cncpts_dict[ln_id])) > 0])
 
-        return final_preds
+        return obj_preds_cncpts, obj_all_cncpts
+
+    def predict_context(self, cntx, metric='mean_y_true'):
+        from scipy.sparse import csr_matrix
+
+        obj_preds_cncpts = self.trace_context(cntx)[0]
+
+        metric = metric if type(metric) == list else [metric]
+        mvals = np.array(
+            [[c._metrics[m] for m in metric] for c in sorted(self.get_concepts(), key=lambda c: c.get_id())])
+
+        preds = []
+        n_objs, n_cncpts = len(obj_preds_cncpts), len(self.get_concepts())
+        for m_id, m in enumerate(metric):
+            X_ = np.array([(mvals[c_id][m_id], g, c_id) for g, c_ids in obj_preds_cncpts.items() for c_id in c_ids])
+            X = csr_matrix((X_[:, 0], (X_[:, 1].astype(int), X_[:, 2].astype(int))),
+                           shape=(n_objs, n_cncpts))
+
+            W_ = np.array([(1 / len(c_ids), g, c_id) for g, c_ids in obj_preds_cncpts.items() for c_id in c_ids])
+            W = csr_matrix((W_[:, 0], (W_[:, 1].astype(int), W_[:, 2].astype(int))),
+                           shape=(n_objs, n_cncpts))
+
+            preds_ = X.multiply(W).sum(1)
+            preds.append(preds_)
+        preds = np.concatenate(preds, 1)
+
+        return preds
 
     def set_concepts(self, concepts):
         concepts = deepcopy(concepts)
@@ -1394,16 +1409,27 @@ class FormalManager:
     def _construct_lattice_from_spanning_tree(self, use_tqdm=False):
         chains = self._get_chains()
         chains = np.array([np.array(sorted(ch)).astype(int) for ch in chains])
-        cncpts_dict = {c.get_id(): c for c in self.get_concepts()}
 
-        all_up_neighbs = {i: set() for i in range(len(cncpts_dict))}
-        not_up_neighbs = {i: set() for i in range(len(cncpts_dict))}
+        cncpts_dict = {}
+        all_up_neighbs, not_up_neighbs = {}, {}
+        for c in self.get_concepts():
+            c_id = c.get_id()
+            cncpts_dict[c_id] = c
+            all_up_neighbs[c_id] = set()
+            not_up_neighbs[c_id] = set()
+            c._up_neighbs = set()
+            c._low_neighbs = set()
+
         for ch_id_cur in tqdm(range(len(chains)), disable=not use_tqdm, desc='iterate through chains'):
             c_ids_comp = np.zeros(len(chains), int)
             for idx_cur, c_id_cur in enumerate(chains[ch_id_cur][1:]):
                 idx_cur += 1
                 c_cur = cncpts_dict[c_id_cur]
-                all_up_neighbs[c_id_cur] |= all_up_neighbs[c_cur._up_neighb_st]
+                if len(c_cur._up_neighbs)>0:
+                    continue
+
+                c_cur._up_neighbs.add(c_cur._up_neighb_st)
+                all_up_neighbs[c_id_cur] |= {c_cur._up_neighb_st} | all_up_neighbs[c_cur._up_neighb_st]
 
                 for ch_id_comp in range(len(chains)):
                     if ch_id_comp == ch_id_cur:
@@ -1415,16 +1441,20 @@ class FormalManager:
                         idx_comp += idx_comp_start
                         if c_id_comp in all_up_neighbs[c_id_cur]:
                             continue
-                        if c_id_comp in not_up_neighbs[c_id_cur]:
-                            c_ids_comp[ch_id_comp] = idx_comp - 1
-                            break
+                        #if c_id_comp in not_up_neighbs[c_id_cur]:
+                        #    c_ids_comp[ch_id_comp] = idx_comp - 1
+                        #    break
 
                         c_comp = cncpts_dict[c_id_comp]
 
-                        if c_id_cur == c_id_comp or not c_cur.is_subconcept_of(c_comp):
-                            c_cur._up_neighbs = c_cur._up_neighbs|{chain_comp[idx_comp - 1]} if c_cur._up_neighbs is not None else {chain_comp[idx_comp - 1]}
-                            c_comp._low_neighbs = c_comp._low_neighbs|{c_id_cur} if c_comp._low_neighbs is not None else {c_id_cur}
-                            c_ids_comp[ch_id_comp] = idx_comp - 1
-                            not_up_neighbs[c_id_cur].add(c_id_comp)
+                        if c_id_comp >= c_id_cur or not c_cur.is_subconcept_of(c_comp):
+                            c_id_prev = chain_comp[idx_comp-1]
+                            c_prev = cncpts_dict[c_id_prev]
+
+                            if c_id_prev not in all_up_neighbs[c_id_cur]:
+                                c_cur._up_neighbs |= {c_id_prev}
+                                c_prev._low_neighbs |= {c_id_cur}
+                            c_ids_comp[ch_id_comp] = c_id_comp
+                            not_up_neighbs[c_id_cur] |= set(chain_comp[idx_comp:])
                             break
                         all_up_neighbs[c_id_cur].add(c_id_comp)
