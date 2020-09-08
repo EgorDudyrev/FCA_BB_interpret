@@ -1406,55 +1406,37 @@ class FormalManager:
             chains.append(chain)
         return chains
 
-    def _construct_lattice_from_spanning_tree(self, use_tqdm=False):
-        chains = self._get_chains()
-        chains = np.array([np.array(sorted(ch)).astype(int) for ch in chains])
-
+    def _construct_lattice_from_spanning_tree(self, use_tqdm=True):
         cncpts_dict = {}
-        all_up_neighbs, not_up_neighbs = {}, {}
+        all_up_neighbs = {}
         for c in self.get_concepts():
             c_id = c.get_id()
             cncpts_dict[c_id] = c
             all_up_neighbs[c_id] = set()
-            not_up_neighbs[c_id] = set()
             c._up_neighbs = set()
             c._low_neighbs = set()
 
-        for ch_id_cur in tqdm(range(len(chains)), disable=not use_tqdm, desc='iterate through chains'):
-            c_ids_comp = np.zeros(len(chains), int)
-            for idx_cur, c_id_cur in enumerate(chains[ch_id_cur][1:]):
-                idx_cur += 1
-                c_cur = cncpts_dict[c_id_cur]
-                if len(c_cur._up_neighbs)>0:
-                    continue
+        for c_cur_id in tqdm(range(len(cncpts_dict)), total=len(cncpts_dict), disable=not use_tqdm, desc='construct lattice from tree'):
+            c_cur = cncpts_dict[c_cur_id]
+            if c_cur_id != 0:
+                all_up_neighbs[c_cur_id] |= all_up_neighbs[c_cur._up_neighb_st]
 
-                c_cur._up_neighbs.add(c_cur._up_neighb_st)
-                all_up_neighbs[c_id_cur] |= {c_cur._up_neighb_st} | all_up_neighbs[c_cur._up_neighb_st]
+            cncpts_to_check = [0]
+            while len(cncpts_to_check) > 0:
+                c_check_id = cncpts_to_check.pop(0)
+                c_check = cncpts_dict[c_check_id]
 
-                for ch_id_comp in range(len(chains)):
-                    if ch_id_comp == ch_id_cur:
-                        continue
+                if c_check_id in all_up_neighbs[c_cur_id] or (c_cur_id != c_check_id and c_cur.is_subconcept_of(c_check)):
+                    all_up_neighbs[c_cur_id].add(c_check_id)
+                    cncpts_to_check += list(c_check._low_neighbs_st)
 
-                    chain_comp = chains[ch_id_comp]
-                    idx_comp_start = c_ids_comp[ch_id_comp]
-                    for idx_comp, c_id_comp in enumerate(chain_comp[idx_comp_start:]):
-                        idx_comp += idx_comp_start
-                        if c_id_comp in all_up_neighbs[c_id_cur]:
-                            continue
-                        #if c_id_comp in not_up_neighbs[c_id_cur]:
-                        #    c_ids_comp[ch_id_comp] = idx_comp - 1
-                        #    break
+            if c_cur_id != 0:
+                c_cur._up_neighbs = copy(all_up_neighbs[c_cur_id])
+                for un_id in sorted(c_cur._up_neighbs, key=lambda x: -x):
+                    if un_id in c_cur._up_neighbs:
+                        c_cur._up_neighbs -= all_up_neighbs[un_id]
+                for un_id in c_cur._up_neighbs:
+                    un = cncpts_dict[un_id]
+                    un._low_neighbs.add(c_cur_id)
 
-                        c_comp = cncpts_dict[c_id_comp]
-
-                        if c_id_comp >= c_id_cur or not c_cur.is_subconcept_of(c_comp):
-                            c_id_prev = chain_comp[idx_comp-1]
-                            c_prev = cncpts_dict[c_id_prev]
-
-                            if c_id_prev not in all_up_neighbs[c_id_cur]:
-                                c_cur._up_neighbs |= {c_id_prev}
-                                c_prev._low_neighbs |= {c_id_cur}
-                            c_ids_comp[ch_id_comp] = c_id_comp
-                            not_up_neighbs[c_id_cur] |= set(chain_comp[idx_comp:])
-                            break
-                        all_up_neighbs[c_id_cur].add(c_id_comp)
+        return
