@@ -942,6 +942,7 @@ class FormalManager:
             new_attrs_str = '' if len(c._new_attrs) == 0 else \
                 f"{','.join(c._new_attrs) if c._new_attrs else ''}" if len(c._new_attrs) < new_attrs_lim \
                     else f"n: {len(c._new_attrs)}"
+            new_attrs_str = new_attrs_str.replace('__leq__', '<=').replace('__geq__','>=').replace('__is__','=').replace('__not__','!=')
             new_objs_str = '' if len(c._new_objs) == 0 else \
                 f"{','.join(c._new_objs) if c._new_objs else ''}" if len(c._new_objs) < new_objs_lim \
                     else f"n: {len(c._new_objs)}"
