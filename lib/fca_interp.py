@@ -873,7 +873,8 @@ class FormalManager:
 
         return pos
 
-    def get_plotly_fig(self, level_sort=None, sort_by=None, y_precision=None, color_by=None, title=None,
+    def get_plotly_fig(self, level_sort=None, sort_by=None, y_precision=None, color_by=None, opacity_by=None,
+                       title=None,
                        cbar_title=None, cmin=None, cmid=None, cmax=None, cmap='RdBu',
                        new_attrs_lim=5, new_objs_lim=5,
                        metrics_to_print='all', figsize=None):
@@ -926,12 +927,14 @@ class FormalManager:
         node_adjacencies = []
         node_text = []
         node_color = []
+        node_opacity = []
         node_title = []
         # for node, adjacencies in enumerate(G.adjacency()):
         for node in G.nodes():
             c = self.get_concept_by_id(node)
             node_color.append(get_not_none(self._get_metric(c, color_by), 'grey'))
             # node_color.append(c._mean_y if c._mean_y is not None else 'grey')
+            node_opacity.append(get_not_none(self._get_metric(c, opacity_by), 1))
             # node_text.append('a\nbc')
             txt_ = c.pretty_repr(metrics_to_print=metrics_to_print).replace('\n', '<br>') + ''
             txt_ = '<br>'.join([x[:50]+('...' if len(x)>50 else '') for x in txt_.split('<br>')])
@@ -946,6 +949,7 @@ class FormalManager:
         # node_text.append('# of connections: '+str(len(adjacencies[1])))
 
         node_trace.marker.color = node_color
+        node_trace.marker.opacity = node_opacity
         node_trace.hovertext = node_text
         node_trace.text = node_title
 
