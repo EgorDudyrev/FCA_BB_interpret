@@ -873,7 +873,8 @@ class FormalManager:
 
         return pos
 
-    def get_plotly_fig(self, level_sort=None, sort_by=None, y_precision=None, color_by=None, title=None,
+    def get_plotly_fig(self, level_sort=None, sort_by=None, y_precision=None, color_by=None, opacity_by=None,
+                       title=None,
                        cbar_title=None, cmin=None, cmid=None, cmax=None, cmap='RdBu',
                        new_attrs_lim=5, new_objs_lim=5,
                        metrics_to_print='all', figsize=None):
@@ -926,12 +927,14 @@ class FormalManager:
         node_adjacencies = []
         node_text = []
         node_color = []
+        node_opacity = []
         node_title = []
         # for node, adjacencies in enumerate(G.adjacency()):
         for node in G.nodes():
             c = self.get_concept_by_id(node)
             node_color.append(get_not_none(self._get_metric(c, color_by), 'grey'))
             # node_color.append(c._mean_y if c._mean_y is not None else 'grey')
+            node_opacity.append(get_not_none(self._get_metric(c, opacity_by), 1))
             # node_text.append('a\nbc')
             txt_ = c.pretty_repr(metrics_to_print=metrics_to_print).replace('\n', '<br>') + ''
             txt_ = '<br>'.join([x[:50]+('...' if len(x)>50 else '') for x in txt_.split('<br>')])
@@ -939,6 +942,7 @@ class FormalManager:
             new_attrs_str = '' if len(c._new_attrs) == 0 else \
                 f"{','.join(c._new_attrs) if c._new_attrs else ''}" if len(c._new_attrs) < new_attrs_lim \
                     else f"n: {len(c._new_attrs)}"
+            new_attrs_str = new_attrs_str.replace('__leq__', '<=').replace('__geq__','>=').replace('__is__','=').replace('__not__','!=')
             new_objs_str = '' if len(c._new_objs) == 0 else \
                 f"{','.join(c._new_objs) if c._new_objs else ''}" if len(c._new_objs) < new_objs_lim \
                     else f"n: {len(c._new_objs)}"
@@ -946,6 +950,7 @@ class FormalManager:
         # node_text.append('# of connections: '+str(len(adjacencies[1])))
 
         node_trace.marker.color = node_color
+        node_trace.marker.opacity = node_opacity
         node_trace.hovertext = node_text
         node_trace.text = node_title
 
@@ -1416,27 +1421,51 @@ class FormalManager:
             c._up_neighbs = set()
             c._low_neighbs = set()
 
-        for c_cur_id in tqdm(range(len(cncpts_dict)), total=len(cncpts_dict), disable=not use_tqdm, desc='construct lattice from tree'):
-            c_cur = cncpts_dict[c_cur_id]
-            if c_cur_id != 0:
-                all_up_neighbs[c_cur_id] |= all_up_neighbs[c_cur._up_neighb_st]
+        for ch_id_cur in tqdm(range(len(chains)), disable=not use_tqdm, desc='iterate through chains'):
+            idxs_comp = np.zeros(len(chains), int)
+            for idx_cur, c_id_cur in enumerate(chains[ch_id_cur][1:]):
+                idx_cur += 1
+                c_cur = cncpts_dict[c_id_cur]
+                if len(c_cur._up_neighbs)>0:
+                    continue
 
-            cncpts_to_check = [0]
-            while len(cncpts_to_check) > 0:
-                c_check_id = cncpts_to_check.pop(0)
-                c_check = cncpts_dict[c_check_id]
+                c_cur._up_neighbs.add(c_cur._up_neighb_st)
+                all_up_neighbs[c_id_cur] |= {c_cur._up_neighb_st} | all_up_neighbs[c_cur._up_neighb_st]
 
-                if c_check_id in all_up_neighbs[c_cur_id] or (c_cur_id != c_check_id and c_cur.is_subconcept_of(c_check)):
-                    all_up_neighbs[c_cur_id].add(c_check_id)
-                    cncpts_to_check += list(c_check._low_neighbs_st)
+                for ch_id_comp in range(len(chains)):
+                    if ch_id_comp == ch_id_cur:
+                        continue
 
-            if c_cur_id != 0:
-                c_cur._up_neighbs = copy(all_up_neighbs[c_cur_id])
-                for un_id in sorted(c_cur._up_neighbs, key=lambda x: -x):
-                    if un_id in c_cur._up_neighbs:
-                        c_cur._up_neighbs -= all_up_neighbs[un_id]
-                for un_id in c_cur._up_neighbs:
-                    un = cncpts_dict[un_id]
-                    un._low_neighbs.add(c_cur_id)
+                    chain_comp = chains[ch_id_comp]
+                    idx_comp_start = idxs_comp[ch_id_comp]
+                    for idx_comp, c_id_comp in enumerate(chain_comp[idx_comp_start:]):
+                        idx_comp += idx_comp_start
+                        if c_id_comp in all_up_neighbs[c_id_cur]:
+                            continue
 
-        return
+                        c_comp = cncpts_dict[c_id_comp]
+
+                        not_upconcept = c_id_comp >= c_id_cur or not c_cur.is_subconcept_of(c_comp) #if stepped on the concept in chain which is not subconcept
+                        last_and_upconcept = idx_comp == len(chain_comp)-1 and c_cur.is_subconcept_of(c_comp) #if at last concepts in the chain is upconcept
+                        
+                        
+                        if not_upconcept or last_and_upconcept:
+                            c_id_prev = chain_comp[idx_comp-1] if not last_and_upconcept else chain_comp[idx_comp]
+                            c_prev = cncpts_dict[c_id_prev]
+
+                            if c_id_prev not in all_up_neighbs[c_id_cur]:
+                                c_cur._up_neighbs |= {c_id_prev}
+                            idxs_comp[ch_id_comp] = idx_comp
+                            not_up_neighbs[c_id_cur] |= set(chain_comp[idx_comp:])
+                            break
+                        all_up_neighbs[c_id_cur].add(c_id_comp)
+
+
+        for c in self.get_concepts():
+            try:
+                c._up_neighbs = c._up_neighbs - {c._idx}
+                for un_id in c._up_neighbs:
+                    cncpts_dict[un_id]._low_neighbs.add(c._idx)
+                c._low_neighbs = c._low_neighbs - {c._idx}
+            except:
+                raise(f'Problem with neighbours of node {c._idx}')
