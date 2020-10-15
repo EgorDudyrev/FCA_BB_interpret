@@ -797,15 +797,16 @@ class FormalManager:
                 c._new_objs = tuple(c.get_extent())
 
     def _calc_concept_levels(self):
-        concepts = self.sort_concepts(self._concepts)
+        cncpts_dict = {c.get_id(): c for c in self.get_concepts()}
 
-        self._top_concept = concepts[0]
+        self._top_concept = cncpts_dict[0]
         # concepts_to_check = [self._top_concept]
-        for c in concepts:
-            if c.get_upper_neighbs() is None or len(c.get_upper_neighbs())==0:
+        for c_id in sorted(cncpts_dict.keys()):
+            c = cncpts_dict[c_id]
+            if c.get_upper_neighbs() is None or len(c.get_upper_neighbs()) == 0:
                 c._level = 0
             else:
-                c._level = max([self.get_concept_by_id(un_id)._level for un_id in c.get_upper_neighbs()]) + 1
+                c._level = max([cncpts_dict[un_id]._level for un_id in c.get_upper_neighbs()]) + 1
 
     def construct_lattice(self, use_tqdm=False, only_spanning_tree=False):
         #if not only_spanning_tree:
@@ -1421,6 +1422,7 @@ class FormalManager:
             c._up_neighbs = set()
             c._low_neighbs = set()
 
+        chains = [sorted(ch) for ch in self._get_chains()]
         for ch_id_cur in tqdm(range(len(chains)), disable=not use_tqdm, desc='iterate through chains'):
             idxs_comp = np.zeros(len(chains), int)
             for idx_cur, c_id_cur in enumerate(chains[ch_id_cur][1:]):
@@ -1447,8 +1449,7 @@ class FormalManager:
 
                         not_upconcept = c_id_comp >= c_id_cur or not c_cur.is_subconcept_of(c_comp) #if stepped on the concept in chain which is not subconcept
                         last_and_upconcept = idx_comp == len(chain_comp)-1 and c_cur.is_subconcept_of(c_comp) #if at last concepts in the chain is upconcept
-                        
-                        
+
                         if not_upconcept or last_and_upconcept:
                             c_id_prev = chain_comp[idx_comp-1] if not last_and_upconcept else chain_comp[idx_comp]
                             c_prev = cncpts_dict[c_id_prev]
@@ -1456,10 +1457,9 @@ class FormalManager:
                             if c_id_prev not in all_up_neighbs[c_id_cur]:
                                 c_cur._up_neighbs |= {c_id_prev}
                             idxs_comp[ch_id_comp] = idx_comp
-                            not_up_neighbs[c_id_cur] |= set(chain_comp[idx_comp:])
+                            #not_up_neighbs[c_id_cur] |= set(chain_comp[idx_comp:])
                             break
                         all_up_neighbs[c_id_cur].add(c_id_comp)
-
 
         for c in self.get_concepts():
             try:
