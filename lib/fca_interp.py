@@ -34,6 +34,7 @@ class FormalManager:
         self._task_type = task_type
         self._context_full = context_full
         self._n_jobs = n_jobs
+        self._concepts_dict = None
 
     def get_context(self):
         return self._context
@@ -45,10 +46,11 @@ class FormalManager:
         return self._concepts
 
     def get_concept_by_id(self, id_):
-        cpt = [c for c in self._concepts if c.get_id() == id_]
-        if len(cpt) == 0:
-            return None
-        return cpt[0]
+        if self._concepts_dict is None:
+            self._concepts_dict = {c.get_id(): c for c in self.get_concepts()}
+        if id_ not in self._concepts_dict:
+            raise ValueError(f"No concept with id {id_}")
+        return self._concepts_dict[id_]
 
     def sort_concepts(self, concepts=None):
         concepts = get_not_none(concepts, self._concepts)
