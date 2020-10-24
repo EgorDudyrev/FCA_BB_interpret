@@ -1452,22 +1452,23 @@ class FormalManager:
                         not_upconcept = c_id_comp >= c_id_cur or not c_cur.is_subconcept_of(c_comp) #if stepped on the concept in chain which is not subconcept
                         last_and_upconcept = idx_comp == len(chain_comp)-1 and c_cur.is_subconcept_of(c_comp) #if at last concepts in the chain is upconcept
 
-                        if not_upconcept or last_and_upconcept:
-                            c_id_prev = chain_comp[idx_comp-1] if not last_and_upconcept else chain_comp[idx_comp]
+                        if last_and_upconcept:
+                            c_cur._up_neighbs |= {c_id_comp}
+                            idxs_comp[ch_id_comp] = idx_comp
+                            all_up_neighbs[c_id_cur].add(c_id_comp)
+                            break
+                            
+                        if not_upconcept:
+                            c_id_prev = chain_comp[idx_comp-1]
                             c_prev = cncpts_dict[c_id_prev]
 
-                            if c_id_prev not in all_up_neighbs[c_id_cur]:
-                                c_cur._up_neighbs |= {c_id_prev}
+                            c_cur._up_neighbs |= {c_id_prev}
                             idxs_comp[ch_id_comp] = idx_comp
-                            #not_up_neighbs[c_id_cur] |= set(chain_comp[idx_comp:])
                             break
                         all_up_neighbs[c_id_cur].add(c_id_comp)
 
         for c in self.get_concepts():
-            try:
-                c._up_neighbs = c._up_neighbs - {c._idx}
-                for un_id in c._up_neighbs:
-                    cncpts_dict[un_id]._low_neighbs.add(c._idx)
-                c._low_neighbs = c._low_neighbs - {c._idx}
-            except:
-                raise(f'Problem with neighbours of node {c._idx}')
+            for un_id in sorted(c._up_neighbs):
+                c._up_neighbs -= all_up_neighbs[un_id]
+            for un_id in c._up_neighbs:
+                cncpts_dict[un_id]._low_neighbs.add(c.get_id())
