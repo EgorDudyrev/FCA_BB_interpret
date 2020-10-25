@@ -46,7 +46,7 @@ class FormalManager:
         return self._concepts
 
     def get_concept_by_id(self, id_):
-        if self._concepts_dict is None:
+        if self._concepts_dict is None or id_ not in self._concepts_dict:
             self._concepts_dict = {c.get_id(): c for c in self.get_concepts()}
         if id_ not in self._concepts_dict:
             raise ValueError(f"No concept with id {id_}")
@@ -186,7 +186,7 @@ class FormalManager:
         #concepts = new_concepts
         self._concepts = concepts
 
-        self._top_concept = self.get_concept_by_id(0)
+        self._top_concept = sorted(concepts, key=lambda c: -len(c.get_extent()))[0] # self.get_concept_by_id(0)]
 
     def delete_concept(self, c_idx):
         c = self.get_concept_by_id(c_idx)
